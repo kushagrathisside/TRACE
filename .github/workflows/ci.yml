@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Lint ────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: lint-${{ hashFiles('backend/requirements.txt') }}
+
+      - name: Install lint dependencies
+        run: pip install ruff
+
+      - name: Ruff lint
+        run: ruff check backend/ --select=E,F,W,I --ignore=E501
+
+      - name: Ruff format check
+        run: ruff format backend/ --check
+
+  # ── Unit Tests ──────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    env:
+      ADMIN_PASSWORD: ci-test-password
+      CORS_ORIGINS: "*"
+      PYTHONPATH: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('backend/requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run unit tests
+        working-directory: backend
+        run: |
+          pytest tests/ \
+            --ignore=tests/test_api.py \
+            -v \
+            --tb=short \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            -x
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: backend/coverage.xml
+          fail_ci_if_error: false
+
+  # ── API Tests (mocked) ──────────────────────────────────────────────────────
+  api-tests:
+    name: API Tests (mocked)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    env:
+      ADMIN_PASSWORD: ci-test-password
+      CORS_ORIGINS: "*"
+      PYTHONPATH: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('backend/requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest httpx
+
+      - name: Run API tests
+        working-directory: backend
+        run: |
+          pytest tests/test_api.py \
+            -v \
+            --tb=short \
+            -x
+
+  # ── Integration Tests (informational — Ollama required) ─────────────────────
+  integration-hint:
+    name: Integration Tests (skipped — Ollama not available in CI)
+    runs-on: ubuntu-latest
+    needs: api-tests
+    steps:
+      - name: Note about integration tests
+        run: |
+          echo "DeepEval regression tests and full end-to-end pipeline tests"
+          echo "require a running Ollama instance and ChromaDB data."
+          echo ""
+          echo "To run locally:"
+          echo "  make eval            # DeepEval regression suite"
+          echo "  make eval-ragas      # RAGAS per-query scoring"
+          echo ""
+          echo "See docs/llmops-evaluation.md for full instructions."

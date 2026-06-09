@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+httpx
+langchain
+langchain-community
+langchain-core
+langchain-ollama
+langchain-huggingface
+langchain-text-splitters
+chromadb
+sentence-transformers
+pillow
+rank-bm25
+slowapi
+portalocker
+numpy

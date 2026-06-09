@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRACE — Admin</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header class="page-header">
+  <h1>⚙️ TRACE — Admin</h1>
+  <nav>
+    <a href="/">Student</a>
+    <a href="/admin">Admin</a>
+  </nav>
+</header>
+
+<div class="container">
+
+  <!-- Auth -->
+  <div id="auth-section" class="card">
+    <h2>Admin Login</h2>
+    <div class="field">
+      <label for="pw">Password</label>
+      <input type="password" id="pw" placeholder="Enter admin password" />
+    </div>
+    <button class="btn btn-primary" onclick="login()">Login</button>
+    <div id="auth-error" style="margin-top:0.75rem"></div>
+  </div>
+
+  <!-- Main admin UI -->
+  <div id="admin-body" style="display:none">
+
+    <!-- Alert -->
+    <div id="admin-alert"></div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card"><div class="num" id="stat-papers">—</div><div class="lbl">Papers Indexed</div></div>
+      <div class="stat-card"><div class="num" id="stat-people">—</div><div class="lbl">People Registered</div></div>
+      <div class="stat-card" style="flex:2;text-align:left;padding:1rem 1.25rem">
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.25rem">Last Sync</div>
+        <div id="stat-sync" style="font-size:0.95rem;font-weight:600">Never</div>
+        <div id="sync-progress" style="margin-top:0.3rem;font-size:0.8rem;color:var(--muted)"></div>
+      </div>
+      <div class="stat-card" style="flex:1;text-align:left;padding:1rem 1.25rem">
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.25rem">System</div>
+        <a href="/health" target="_blank" style="font-size:0.85rem;font-weight:600">Health check →</a>
+      </div>
+    </div>
+
+    <!-- Sync -->
+    <div class="card">
+      <h2>Data Sync</h2>
+      <p style="color:var(--muted);font-size:0.875rem;margin-bottom:0.75rem">
+        Fetches papers from Semantic Scholar for all registered people and updates the vector database.
+        Re-running is safe — existing papers are deduplicated by paper ID.
+        <strong>Incremental:</strong> previously synced authors only fetch papers from their last known publication year onward.
+      </p>
+      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary" id="syncBtn" onclick="triggerSync()">🔄 Sync Now</button>
+        <span id="sync-msg" style="font-size:0.875rem;color:var(--muted)"></span>
+      </div>
+    </div>
+
+    <!-- People -->
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <h2 style="margin:0">Registered People</h2>
+        <button class="btn btn-secondary" onclick="openAddModal()">+ Add Person</button>
+      </div>
+      <div class="table-wrap">
+        <table id="people-table">
+          <thead>
+            <tr><th>Name</th><th>Role</th><th>Department</th><th>Email</th><th>S2 ID</th><th>Last Sync Year</th><th></th></tr>
+          </thead>
+          <tbody id="people-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Add Person Modal -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal">
+    <h3>Add Person</h3>
+
+    <div class="field">
+      <label>Search Semantic Scholar</label>
+      <div style="display:flex;gap:0.5rem">
+        <input type="text" id="s2-search" placeholder="e.g. Yann LeCun" />
+        <button class="btn btn-secondary" onclick="searchS2()" style="white-space:nowrap">Search</button>
+      </div>
+    </div>
+    <div id="s2-results" style="margin-bottom:1rem;max-height:180px;overflow-y:auto"></div>
+
+    <div class="field">
+      <label>Full Name</label>
+      <input type="text" id="f-name" placeholder="Dr. Jane Smith" />
+    </div>
+    <div style="display:flex;gap:0.75rem">
+      <div class="field" style="flex:1">
+        <label>Role</label>
+        <select id="f-role">
+          <option value="faculty">Faculty</option>
+          <option value="student">Student</option>
+        </select>
+      </div>
+      <div class="field" style="flex:2">
+        <label>Department</label>
+        <input type="text" id="f-dept" placeholder="Computer Science" />
+      </div>
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input type="text" id="f-email" placeholder="jsmith@institute.edu" />
+    </div>
+    <div class="field">
+      <label>Semantic Scholar ID</label>
+      <input type="text" id="f-s2id" placeholder="2262347" />
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeAddModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="addPerson()">Add</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let ADMIN_PW = '';
+let _perPerson = {};  // s2_id → {last_year, count}
+
+/* ── Auth ─────────────────────────────────────────────────────────────── */
+async function login() {
+  ADMIN_PW = document.getElementById('pw').value;
+  const res = await apiFetch('GET', '/api/people');
+  if (res.ok) {
+    document.getElementById('auth-section').style.display = 'none';
+    document.getElementById('admin-body').style.display = 'block';
+    loadAll();
+  } else {
+    document.getElementById('auth-error').innerHTML =
+      `<div class="alert alert-error">Incorrect password.</div>`;
+    ADMIN_PW = '';
+  }
+}
+document.getElementById('pw').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+function apiFetch(method, url, body) {
+  return fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Password': ADMIN_PW },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+function showAdminAlert(msg, type) {
+  document.getElementById('admin-alert').innerHTML =
+    `<div class="alert alert-${type}">${esc(msg)}</div>`;
+  setTimeout(() => { document.getElementById('admin-alert').innerHTML = ''; }, 6000);
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Load all ─────────────────────────────────────────────────────────── */
+async function loadAll() { await Promise.all([loadStats(), loadPeople()]); }
+
+async function loadStats() {
+  try {
+    const r = await apiFetch('GET', '/api/stats');
+    const d = await r.json();
+    document.getElementById('stat-papers').textContent = d.total_papers ?? '—';
+    document.getElementById('stat-people').textContent = d.total_people ?? '—';
+    document.getElementById('stat-sync').textContent   = d.last_sync
+      ? new Date(d.last_sync).toLocaleString() : 'Never';
+    // Also load per-person sync history
+    const sr = await apiFetch('GET', '/api/sync/status');
+    const ss = await sr.json();
+    _perPerson = ss.per_person || {};
+  } catch(_) {}
+}
+
+async function loadPeople() {
+  const r = await apiFetch('GET', '/api/people?page_size=500');
+  const data = await r.json();
+  // API returns {people:[...], total:N, ...}
+  const people = data.people ?? data;
+  const tbody = document.getElementById('people-tbody');
+  tbody.innerHTML = '';
+  if (!people.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:1.5rem">No people registered yet.</td></tr>';
+    return;
+  }
+  for (const p of people) {
+    const pp = _perPerson[p.semantic_scholar_id] || {};
+    tbody.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td><strong>${esc(p.name)}</strong></td>
+        <td><span class="badge badge-${p.role}">${esc(p.role)}</span></td>
+        <td>${esc(p.department)}</td>
+        <td>${esc(p.email)}</td>
+        <td style="font-family:monospace;font-size:0.8rem">${esc(p.semantic_scholar_id)}</td>
+        <td style="font-size:0.82rem;color:var(--muted)">${pp.last_year ? pp.last_year + ' ('+pp.count+' papers)' : 'Never'}</td>
+        <td>
+          <button class="btn btn-danger" style="padding:0.3rem 0.75rem;font-size:0.8rem"
+            onclick="deletePerson('${esc(p.id)}','${esc(p.name)}')">Remove</button>
+        </td>
+      </tr>`);
+  }
+}
+
+/* ── Delete ───────────────────────────────────────────────────────────── */
+async function deletePerson(id, name) {
+  if (!confirm(`Remove ${name}? Their sole-authored papers will be removed from the DB.`)) return;
+  const r = await apiFetch('DELETE', `/api/people/${id}`);
+  if (r.ok) {
+    const d = await r.json();
+    showAdminAlert(
+      `${name} removed. Papers deleted: ${d.papers_deleted}, updated: ${d.papers_updated}.`,
+      'success'
+    );
+    loadAll();
+  } else {
+    showAdminAlert('Failed to remove.', 'error');
+  }
+}
+
+/* ── Sync ─────────────────────────────────────────────────────────────── */
+let pollTimer = null;
+
+async function triggerSync() {
+  const btn = document.getElementById('syncBtn');
+  btn.disabled = true;
+  const r = await apiFetch('POST', '/api/sync');
+  if (!r.ok) {
+    const e = await r.json();
+    showAdminAlert(e.detail || 'Sync failed', 'error');
+    btn.disabled = false;
+    return;
+  }
+  document.getElementById('sync-msg').textContent = 'Sync running…';
+  pollSyncStatus();
+}
+
+function pollSyncStatus() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const r  = await apiFetch('GET', '/api/sync/status');
+    const ss = await r.json();
+    const prog = document.getElementById('sync-progress');
+    prog.textContent = ss.current_person ? `Fetching: ${ss.current_person}` : '';
+    if (ss.status === 'done' || ss.status === 'error') {
+      clearInterval(pollTimer);
+      document.getElementById('syncBtn').disabled = false;
+      document.getElementById('sync-msg').textContent = '';
+      prog.textContent = '';
+      const errMsg = (ss.errors || []).length ? ` Errors: ${ss.errors.join('; ')}` : '';
+      showAdminAlert(
+        ss.status === 'done'
+          ? `Sync complete — ${ss.papers_indexed} papers in DB.${errMsg}`
+          : `Sync failed.${errMsg}`,
+        ss.status === 'done' ? 'success' : 'error'
+      );
+      loadAll();
+    }
+  }, 2000);
+}
+
+/* ── Add Person Modal ─────────────────────────────────────────────────── */
+function openAddModal() {
+  document.getElementById('add-modal').classList.add('open');
+}
+function closeAddModal() {
+  document.getElementById('add-modal').classList.remove('open');
+  ['s2-search','f-name','f-dept','f-email','f-s2id'].forEach(id =>
+    document.getElementById(id).value = '');
+  document.getElementById('s2-results').innerHTML = '';
+}
+
+async function searchS2() {
+  const q = document.getElementById('s2-search').value.trim();
+  if (!q) return;
+  const container = document.getElementById('s2-results');
+  container.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">Searching…</div>';
+  try {
+    const r = await apiFetch('POST', '/api/author/search', { name: q });
+    const d = await r.json();
+    container.innerHTML = '';
+    if (!d.results?.length) {
+      container.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">No results found.</div>';
+      return;
+    }
+    for (const a of d.results) {
+      const aff = (a.affiliations || []).map(x => x.name || x).join(', ');
+      container.insertAdjacentHTML('beforeend', `
+        <div class="s2-result" onclick="selectS2Author('${esc(a.authorId)}','${esc(a.name)}')">
+          <div class="s2-name">${esc(a.name)}</div>
+          <div class="s2-meta">${aff ? esc(aff)+' · ' : ''}${a.paperCount ?? 0} papers · ID: ${esc(a.authorId)}</div>
+        </div>`);
+    }
+  } catch(e) {
+    container.innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
+}
+
+function selectS2Author(id, name) {
+  document.getElementById('f-s2id').value = id;
+  if (!document.getElementById('f-name').value)
+    document.getElementById('f-name').value = name;
+  document.getElementById('s2-results').innerHTML =
+    `<div class="alert alert-success" style="margin-top:0.25rem">Selected: ${esc(name)} (ID: ${esc(id)})</div>`;
+}
+
+async function addPerson() {
+  const name = document.getElementById('f-name').value.trim();
+  const role = document.getElementById('f-role').value;
+  const dept = document.getElementById('f-dept').value.trim();
+  const email= document.getElementById('f-email').value.trim();
+  const s2id = document.getElementById('f-s2id').value.trim();
+  if (!name || !s2id) {
+    showAdminAlert('Name and Semantic Scholar ID are required.', 'error');
+    return;
+  }
+  const r = await apiFetch('POST', '/api/people', {
+    name, role, department: dept, email, semantic_scholar_id: s2id,
+  });
+  if (r.ok) {
+    showAdminAlert(`${name} added successfully.`, 'success');
+    closeAddModal();
+    loadAll();
+  } else {
+    const e = await r.json();
+    showAdminAlert(e.detail || 'Failed to add.', 'error');
+  }
+}
+
+/* Close modal on backdrop click */
+document.getElementById('add-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeAddModal();
+});
+</script>
+</body>
+</html>

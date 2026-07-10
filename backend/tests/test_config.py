@@ -4,13 +4,11 @@ Unit tests for config.py — validation logic, env-var parsing.
 These tests run without Ollama or ChromaDB and are safe for CI.
 """
 
-import os
 import pytest
 
 
 def _import_config(**env_overrides):
     """Re-import config with a patched environment."""
-    import importlib
     import sys
 
     env = {
@@ -24,6 +22,7 @@ def _import_config(**env_overrides):
         # Remove cached module so it re-evaluates with the new env
         sys.modules.pop("config", None)
         import config as cfg
+
         return cfg
 
 
@@ -35,6 +34,7 @@ def test_config_loads_with_valid_env():
 
 def test_config_raises_without_admin_password():
     import sys
+
     sys.modules.pop("config", None)
     with pytest.MonkeyPatch().context() as mp:
         mp.delenv("ADMIN_PASSWORD", raising=False)

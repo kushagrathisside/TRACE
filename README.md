@@ -57,6 +57,8 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ## Screenshots & UI Overview
 
 ### Student Interface (`/`)
+![Student Interface 1](screenshots/screenshot1.png)
+![Student Interface 2](screenshots/screenshot2.png)
 
 The student page is a single-input form. Students type a research idea in natural language and receive:
 
@@ -67,6 +69,7 @@ The student page is a single-input form. Students type a research idea in natura
 - **Thumbs feedback** — up/down rating and optional comment
 
 ### Admin Interface (`/admin`)
+![Admin Interface](screenshots/screenshot3.png)
 
 The admin panel is a password-protected dashboard for managing data:
 

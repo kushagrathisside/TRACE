@@ -30,9 +30,10 @@ server startup.  With 15 k papers × 200 words, build time ~0.5 s, memory ~25 MB
 """
 
 import logging
+
 import numpy as np
-from rank_bm25 import BM25Okapi
 from langchain_core.documents import Document
+from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +71,7 @@ class HybridSearcher:
         tokens = query.lower().split()
         scores: np.ndarray = self.bm25.get_scores(tokens)
         top_indices = np.argsort(scores)[::-1][:top_k]
-        return [
-            (float(scores[i]), self.docs[i])
-            for i in top_indices
-            if scores[i] >= 0
-        ]
+        return [(float(scores[i]), self.docs[i]) for i in top_indices if scores[i] >= 0]
 
     # ── Fusion ───────────────────────────────────────────────────────────────
 
@@ -96,6 +93,7 @@ class HybridSearcher:
             current-year paper, so relevance still dominates.
         """
         import datetime
+
         current_year = datetime.date.today().year
 
         scores: dict[str, float] = {}
@@ -113,11 +111,12 @@ class HybridSearcher:
 
         # Recency discount
         import config as _cfg
+
         if _cfg.RECENCY_WEIGHT > 0:
             for pid, doc in doc_map.items():
                 year = doc.metadata.get("year") or 0
                 if year > 0:
-                    age   = max(0, current_year - year)
+                    age = max(0, current_year - year)
                     bonus = _cfg.RECENCY_WEIGHT * max(0.0, 1.0 - age / 10.0)
                     scores[pid] = scores[pid] + bonus
 

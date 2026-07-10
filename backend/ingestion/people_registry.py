@@ -14,11 +14,11 @@ import json
 import uuid
 from pathlib import Path
 
-import portalocker
 import config
+import portalocker
 
 _REGISTRY = Path(config.PEOPLE_REGISTRY_PATH)
-_LOCK     = Path(str(_REGISTRY) + ".lock")
+_LOCK = Path(str(_REGISTRY) + ".lock")
 
 
 def _load() -> dict:

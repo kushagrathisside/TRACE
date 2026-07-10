@@ -26,12 +26,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import chromadb
+import config
 from chromadb.config import Settings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
-
 from llm_provider import LLMProvider
-import config
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ def _check_embedding_model() -> None:
     then run a sync.  This forces a full re-embed with the new model.
     """
     meta_path = Path(config.CHROMA_META_PATH)
-    current   = config.EMBEDDING_MODEL_NAME
+    current = config.EMBEDDING_MODEL_NAME
 
     if meta_path.exists():
         try:
@@ -59,22 +58,26 @@ def _check_embedding_model() -> None:
             stored = ""
         if stored and stored != current:
             raise RuntimeError(
-                f"\n\n{'='*60}\n"
+                f"\n\n{'=' * 60}\n"
                 f"EMBEDDING MODEL MISMATCH — retrieval will be WRONG\n"
-                f"{'='*60}\n"
+                f"{'=' * 60}\n"
                 f"  DB was built with : '{stored}'\n"
                 f"  Config now says   : '{current}'\n\n"
                 f"  Fix:\n"
                 f"    1. rm -rf backend/data/chroma_db backend/data/chroma_meta.json\n"
                 f"    2. Restart the server and run a sync\n"
-                f"{'='*60}\n"
+                f"{'=' * 60}\n"
             )
     else:
         meta_path.parent.mkdir(parents=True, exist_ok=True)
-        meta_path.write_text(json.dumps({
-            "embedding_model": current,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }))
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "embedding_model": current,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        )
 
 
 class VectorStoreManager:
@@ -104,10 +107,10 @@ class VectorStoreManager:
         self._collection = self._client.get_or_create_collection(
             name="institute_research",
             metadata={
-                "hnsw:space":           config.HNSW_SPACE,
-                "hnsw:M":               config.HNSW_M,
+                "hnsw:space": config.HNSW_SPACE,
+                "hnsw:M": config.HNSW_M,
                 "hnsw:construction_ef": config.HNSW_CONSTRUCTION_EF,
-                "hnsw:search_ef":       config.HNSW_SEARCH_EF,
+                "hnsw:search_ef": config.HNSW_SEARCH_EF,
             },
         )
         # LangChain wrapper that re-uses the same client (no second connection)
@@ -191,10 +194,12 @@ class VectorStoreManager:
                 # Rebuild roles/departments strings from remaining authors' metadata
                 # (we only have the stored strings here, so just strip the name)
                 to_update_ids.append(doc_id)
-                to_update_metas.append({
-                    **meta,
-                    "institute_authors": ", ".join(remaining),
-                })
+                to_update_metas.append(
+                    {
+                        **meta,
+                        "institute_authors": ", ".join(remaining),
+                    }
+                )
 
         if to_delete:
             self._collection.delete(ids=to_delete)

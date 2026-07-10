@@ -22,9 +22,8 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from langchain_core.documents import Document
-
 import config
+from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +41,22 @@ def score_and_log(
 
     try:
         from datasets import Dataset
-        from ragas import evaluate
-        from ragas.metrics import answer_relevancy, faithfulness
-        from ragas.llms import LangchainLLMWrapper
         from llm_provider import LLMProvider
+        from ragas import evaluate
+        from ragas.llms import LangchainLLMWrapper
+        from ragas.metrics import answer_relevancy, faithfulness
 
         llm_wrapper = LangchainLLMWrapper(LLMProvider.get_llm(temperature=0.0))
 
-        ds = Dataset.from_dict({
-            "question": [query],
-            "answer":   [answer_summary],
-            "contexts": [[d.page_content for d in context_docs]] if context_docs else [[""]],
-        })
+        ds = Dataset.from_dict(
+            {
+                "question": [query],
+                "answer": [answer_summary],
+                "contexts": [[d.page_content for d in context_docs]]
+                if context_docs
+                else [[""]],
+            }
+        )
         result = evaluate(
             ds,
             metrics=[faithfulness, answer_relevancy],
@@ -61,7 +64,7 @@ def score_and_log(
             raise_exceptions=False,
         )
         scores = {
-            "faithfulness":     round(float(result["faithfulness"]),     3),
+            "faithfulness": round(float(result["faithfulness"]), 3),
             "answer_relevancy": round(float(result["answer_relevancy"]), 3),
         }
     except ImportError:
@@ -72,9 +75,9 @@ def score_and_log(
         return scores
 
     entry = {
-        "event":            "ragas_score",
-        "timestamp":        datetime.now(timezone.utc).isoformat(),
-        "query":            query[:200],
+        "event": "ragas_score",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "query": query[:200],
         **scores,
     }
     path = Path(config.FEEDBACK_LOG_PATH)

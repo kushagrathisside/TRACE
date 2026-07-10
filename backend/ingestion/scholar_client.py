@@ -17,8 +17,9 @@ or reduce it to 0.1 s for significantly faster bulk syncs.
 """
 
 import time
-import httpx
+
 import config
+import httpx
 
 _HEADERS: dict[str, str] = (
     {"x-api-key": config.SEMANTIC_SCHOLAR_API_KEY}
@@ -36,12 +37,9 @@ def _get(url: str, params: dict) -> dict:
             params=params,
             headers=_HEADERS,
             timeout=20,
-            # Bypass system proxy — socks scheme breaks httpx without the socks extra.
-            # Scholar API is always reached directly.
-            proxies={},  # type: ignore[arg-type]
         )
         if resp.status_code == 429:
-            wait = 2 ** attempt
+            wait = 2**attempt
             if attempt < 3:
                 time.sleep(wait)
                 continue

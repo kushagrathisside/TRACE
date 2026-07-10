@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 @pytest.fixture(scope="module")
 def client():
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     # Mock pipeline.run so no real LLM is needed
     mock_result = {
@@ -33,7 +33,6 @@ def client():
     }
 
     # Mock Ollama health check so /api/query doesn't need Ollama running
-    import httpx
 
     def mock_get(url, **kwargs):
         r = MagicMock()
@@ -42,10 +41,13 @@ def client():
         r.raise_for_status = lambda: None
         return r
 
-    with patch("rag.pipeline.run", return_value=mock_result), \
-         patch("httpx.get", side_effect=mock_get):
-        from fastapi.testclient import TestClient
+    with (
+        patch("rag.pipeline.run", return_value=mock_result),
+        patch("httpx.get", side_effect=mock_get),
+    ):
         import main
+        from fastapi.testclient import TestClient
+
         yield TestClient(main.app, raise_server_exceptions=False)
 
 
@@ -54,6 +56,7 @@ WRONG_HEADERS = {"X-Admin-Password": "wrong"}
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
+
 
 def test_health_returns_200(client):
     resp = client.get("/health")
@@ -64,6 +67,7 @@ def test_health_returns_200(client):
 
 
 # ── Student: query ────────────────────────────────────────────────────────────
+
 
 def test_query_empty_idea_returns_400(client):
     resp = client.post("/api/query", json={"idea": "   "})
@@ -90,34 +94,45 @@ def test_query_response_has_landscape_keys(client):
 
 # ── Student: feedback ─────────────────────────────────────────────────────────
 
+
 def test_feedback_thumbs_up(client):
-    resp = client.post("/api/feedback", json={
-        "query": "test query",
-        "rating": "up",
-        "comment": "",
-    })
+    resp = client.post(
+        "/api/feedback",
+        json={
+            "query": "test query",
+            "rating": "up",
+            "comment": "",
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
 
 def test_feedback_thumbs_down(client):
-    resp = client.post("/api/feedback", json={
-        "query": "bad result query",
-        "rating": "down",
-        "comment": "results were irrelevant",
-    })
+    resp = client.post(
+        "/api/feedback",
+        json={
+            "query": "bad result query",
+            "rating": "down",
+            "comment": "results were irrelevant",
+        },
+    )
     assert resp.status_code == 200
 
 
 def test_feedback_invalid_rating_returns_422(client):
-    resp = client.post("/api/feedback", json={
-        "query": "test",
-        "rating": "maybe",
-    })
+    resp = client.post(
+        "/api/feedback",
+        json={
+            "query": "test",
+            "rating": "maybe",
+        },
+    )
     assert resp.status_code == 422
 
 
 # ── Admin: auth ───────────────────────────────────────────────────────────────
+
 
 def test_admin_endpoints_reject_wrong_password(client):
     for path in ["/api/people", "/api/stats", "/api/sync/status"]:
@@ -131,6 +146,7 @@ def test_admin_endpoints_reject_missing_password(client):
 
 
 # ── Admin: people ─────────────────────────────────────────────────────────────
+
 
 def test_list_people_returns_paginated(client):
     resp = client.get("/api/people", headers=ADMIN_HEADERS)
@@ -153,6 +169,7 @@ def test_list_people_invalid_page(client):
 
 
 # ── Admin: stats ──────────────────────────────────────────────────────────────
+
 
 def test_stats_returns_expected_keys(client):
     resp = client.get("/api/stats", headers=ADMIN_HEADERS)

@@ -8,14 +8,12 @@ These run without Ollama or ChromaDB.
 import os
 import sys
 
-import pytest
-
 os.environ.setdefault("ADMIN_PASSWORD", "test")
 os.environ.setdefault("CORS_ORIGINS", "*")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from langchain_core.documents import Document
-from rag.chain import ResearchLandscape, PaperReference, _hallucination_guard
+from rag.chain import PaperReference, ResearchLandscape, _hallucination_guard
 
 
 def _doc(title: str) -> Document:
@@ -28,6 +26,7 @@ def _paper(title: str) -> PaperReference:
 
 # ── Exact / substring match ───────────────────────────────────────────────────
 
+
 def test_exact_title_match_passes():
     docs = [_doc("Attention Is All You Need")]
     landscape = ResearchLandscape(
@@ -39,10 +38,16 @@ def test_exact_title_match_passes():
 
 
 def test_substring_match_passes():
-    docs = [_doc("BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding")]
+    docs = [
+        _doc(
+            "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+        )
+    ]
     landscape = ResearchLandscape(
         landscape_summary="summary",
-        related_papers=[_paper("BERT: Pre-training of Deep Bidirectional Transformers")],
+        related_papers=[
+            _paper("BERT: Pre-training of Deep Bidirectional Transformers")
+        ],
     )
     result = _hallucination_guard(landscape, docs)
     assert len(result.related_papers) == 1
@@ -60,11 +65,14 @@ def test_fabricated_title_is_dropped():
 
 # ── Jaccard fuzzy match (threshold 0.75) ─────────────────────────────────────
 
+
 def test_high_word_overlap_passes():
     docs = [_doc("Graph Neural Networks for Molecular Property Prediction")]
     landscape = ResearchLandscape(
         landscape_summary="summary",
-        related_papers=[_paper("Graph Neural Networks for Molecular Property Prediction Tasks")],
+        related_papers=[
+            _paper("Graph Neural Networks for Molecular Property Prediction Tasks")
+        ],
     )
     result = _hallucination_guard(landscape, docs)
     assert len(result.related_papers) == 1
@@ -83,6 +91,7 @@ def test_low_word_overlap_below_threshold_is_dropped():
 
 
 # ── Mixed valid and invalid ───────────────────────────────────────────────────
+
 
 def test_mixed_papers_only_valid_kept():
     docs = [

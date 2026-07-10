@@ -34,15 +34,16 @@ Stage latencies (approximate, CPU, 15 k papers)
 import json
 import logging
 import time
-from langchain_core.documents import Document
 
-from llm_provider import LLMProvider
-from rag.vector_store import VectorStoreManager
-from rag.semantic_cache import SemanticCache
-from rag.reranker import Reranker
-from rag.hybrid_search import HybridSearcher
-from rag.chain import generate_answer, ResearchLandscape
 import config
+from langchain_core.documents import Document
+from llm_provider import LLMProvider
+
+from rag.chain import ResearchLandscape, generate_answer
+from rag.hybrid_search import HybridSearcher
+from rag.reranker import Reranker
+from rag.semantic_cache import SemanticCache
+from rag.vector_store import VectorStoreManager
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,8 @@ def _expand_query(query: str) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def run(query: str) -> dict:
+
+def run(query: str, bypass_cache: bool = False) -> dict:
     """
     Execute the full pipeline synchronously.
     Called from the FastAPI endpoint via run_in_executor so it doesn't block
@@ -99,15 +101,22 @@ def run(query: str) -> dict:
     # ── Stage 1: Semantic cache check ────────────────────────────────────────
     query_vec = embeddings.embed_query(query)
     cache = _get_cache()
-    hit = cache.get(query_vec)
-    if hit:
-        elapsed = (time.perf_counter() - t0) * 1000
-        logger.info(json.dumps({
-            "event": "query", "cached": True,
-            "latency_ms": round(elapsed, 1),
-            "query_preview": query[:80],
-        }))
-        return {**hit, "cached": True}
+
+    if not bypass_cache:
+        hit = cache.get(query_vec)
+        if hit:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "query",
+                        "cached": True,
+                        "latency_ms": round(elapsed, 1),
+                        "query_preview": query[:80],
+                    }
+                )
+            )
+            return {**hit, "cached": True}
 
     # ── Stage 2: Query expansion ──────────────────────────────────────────────
     expanded = _expand_query(query)
@@ -123,7 +132,8 @@ def run(query: str) -> dict:
     # This prevents the LLM from hallucinating connections when nothing truly
     # relevant was retrieved.
     close: list[tuple[Document, float]] = [
-        (doc, dist) for doc, dist in raw_results
+        (doc, dist)
+        for doc, dist in raw_results
         if dist <= config.MIN_SIMILARITY_DISTANCE
     ]
     if not close:
@@ -160,6 +170,7 @@ def run(query: str) -> dict:
     if config.ENABLE_RAGAS_SCORING:
         try:
             from eval.ragas_scorer import score_and_log
+
             score_and_log(query, landscape.landscape_summary, final_docs)
         except Exception as exc:
             logger.warning(f"RAGAS scoring failed (non-fatal): {exc}")
@@ -167,14 +178,14 @@ def run(query: str) -> dict:
     # ── Build sources list ────────────────────────────────────────────────────
     sources = [
         {
-            "title":            d.metadata.get("paper_title", ""),
-            "year":             d.metadata.get("year", ""),
-            "venue":            d.metadata.get("venue", ""),
-            "authors":          d.metadata.get("authors", ""),
+            "title": d.metadata.get("paper_title", ""),
+            "year": d.metadata.get("year", ""),
+            "venue": d.metadata.get("venue", ""),
+            "authors": d.metadata.get("authors", ""),
             "institute_authors": d.metadata.get("institute_authors", ""),
-            "institute_roles":  d.metadata.get("institute_roles", ""),
-            "departments":      d.metadata.get("departments", ""),
-            "url":              d.metadata.get("paper_url", ""),
+            "institute_roles": d.metadata.get("institute_roles", ""),
+            "departments": d.metadata.get("departments", ""),
+            "url": d.metadata.get("paper_url", ""),
         }
         for d in final_docs
     ]
@@ -189,14 +200,20 @@ def run(query: str) -> dict:
     cache.set(query_vec, query, landscape.model_dump(), sources)
 
     elapsed = (time.perf_counter() - t0) * 1000
-    logger.info(json.dumps({
-        "event": "query",
-        "cached": False,
-        "retrieved": len(final_docs),
-        "top_rerank_score": round(reranked_pairs[0][0], 3) if reranked_pairs else None,
-        "latency_ms": round(elapsed, 1),
-        "query_preview": query[:80],
-    }))
+    logger.info(
+        json.dumps(
+            {
+                "event": "query",
+                "cached": False,
+                "retrieved": len(final_docs),
+                "top_rerank_score": round(reranked_pairs[0][0], 3)
+                if reranked_pairs
+                else None,
+                "latency_ms": round(elapsed, 1),
+                "query_preview": query[:80],
+            }
+        )
+    )
 
     return result
 
@@ -227,6 +244,7 @@ def post_sync_rebuild() -> None:
     # Run self-retrieval test to detect embedding corruption
     try:
         from eval.self_retrieval import run as run_self_retrieval
+
         logger.info("Running self-retrieval test...")
         run_self_retrieval(k=5, sample=min(100, len(docs)))
     except Exception as exc:

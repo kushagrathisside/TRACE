@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TRACE — Research Navigator</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=2" />
 </head>
 <body>
 
@@ -94,7 +94,7 @@
 <script>
 let _lastQuery = '';
 
-async function submitQuery() {
+async function submitQuery(bypassCache = false) {
   const idea = document.getElementById('idea').value.trim();
   if (!idea) { showAlert('Please describe your idea first.', 'error'); return; }
 
@@ -111,7 +111,7 @@ async function submitQuery() {
     const res = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idea }),
+      body: JSON.stringify({ idea, bypass_cache: bypassCache }),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -132,9 +132,11 @@ function renderResults({ answer, sources, cached }) {
 
   // Cache indicator
   const badge = document.getElementById('cache-badge');
-  badge.textContent = cached
-    ? '⚡ Served from semantic cache (identical query answered before)'
-    : '';
+  if (cached) {
+    badge.innerHTML = '⚡ Served from semantic cache (identical query answered before) — <a href="#" onclick="submitQuery(true); return false;" style="color:var(--primary);text-decoration:underline;cursor:pointer">Refresh Cache</a>';
+  } else {
+    badge.innerHTML = '';
+  }
 
   // If no results
   if (answer.no_relevant_research) {
@@ -218,7 +220,7 @@ function renderResults({ answer, sources, cached }) {
           <div class="meta">${s.year ? s.year + ' · ' : ''}${esc(s.venue)}</div>
           <div class="meta">${esc(s.authors)}</div>
           ${s.institute_authors ? `<div style="margin-top:0.4rem;font-size:0.82rem">
-            <strong>Institute:</strong> ${esc(s.institute_authors)}
+            <strong>Institute Authors:</strong> ${esc(s.institute_authors)}
             <span class="badge ${badgeCls}" style="margin-left:0.3rem">${esc(role || 'unknown')}</span>
           </div>` : ''}
           ${s.url ? `<div style="margin-top:0.5rem"><a href="${esc(s.url)}" target="_blank" style="font-size:0.8rem">View paper →</a></div>` : ''}

@@ -27,25 +27,31 @@ from pathlib import Path
 sys.path.insert(0, ".")
 import config
 
-EVAL_SET  = Path("data/eval_set.json")
-MLRUNS    = Path("data/mlruns")
+EVAL_SET = Path("data/eval_set.json")
+MLRUNS = Path("data/mlruns")
 
 
 # ── Retrieval metrics ─────────────────────────────────────────────────────────
 
+
 def hit_rate(retrieved: list[str], relevant: list[str], k: int) -> float:
     return float(any(pid in retrieved[:k] for pid in relevant))
 
+
 def ndcg(retrieved: list[str], relevant: list[str], k: int) -> float:
-    dcg   = sum(1.0 / math.log2(r + 2) for r, pid in enumerate(retrieved[:k]) if pid in relevant)
+    dcg = sum(
+        1.0 / math.log2(r + 2) for r, pid in enumerate(retrieved[:k]) if pid in relevant
+    )
     ideal = sum(1.0 / math.log2(i + 2) for i in range(min(len(relevant), k)))
     return dcg / ideal if ideal > 0 else 0.0
+
 
 def avg(lst: list) -> float:
     return sum(lst) / len(lst) if lst else 0.0
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def run(run_name: str) -> None:
     try:
@@ -77,31 +83,33 @@ def run(run_name: str) -> None:
     k = config.RETRIEVAL_K
 
     with mlflow.start_run(run_name=run_name):
-        mlflow.log_params({
-            "retrieval_k":          k,
-            "fetch_k":              config.RETRIEVAL_FETCH_K,
-            "embedding_model":      config.EMBEDDING_MODEL_NAME,
-            "reranker_model":       config.RERANKER_MODEL_NAME,
-            "llm_model":            config.LLM_MODEL_NAME,
-            "min_similarity_dist":  config.MIN_SIMILARITY_DISTANCE,
-            "recency_weight":       config.RECENCY_WEIGHT,
-            "hnsw_M":               config.HNSW_M,
-            "hnsw_search_ef":       config.HNSW_SEARCH_EF,
-        })
+        mlflow.log_params(
+            {
+                "retrieval_k": k,
+                "fetch_k": config.RETRIEVAL_FETCH_K,
+                "embedding_model": config.EMBEDDING_MODEL_NAME,
+                "reranker_model": config.RERANKER_MODEL_NAME,
+                "llm_model": config.LLM_MODEL_NAME,
+                "min_similarity_dist": config.MIN_SIMILARITY_DISTANCE,
+                "recency_weight": config.RECENCY_WEIGHT,
+                "hnsw_M": config.HNSW_M,
+                "hnsw_search_ef": config.HNSW_SEARCH_EF,
+            }
+        )
 
         hit_rates, ndcgs, latencies = [], [], []
         f_scores, r_scores = [], []
 
         for item in items:
             q = item["query"]
-            print(f"  [{item.get('id','?')}] {q[:70]}…")
+            print(f"  [{item.get('id', '?')}] {q[:70]}…")
 
-            t0     = time.perf_counter()
+            t0 = time.perf_counter()
             result = pipeline.run(q)
             elapsed = (time.perf_counter() - t0) * 1000
 
-            retrieved  = [s["title"] for s in result["sources"]]
-            relevant   = item.get("relevant_paper_ids", [])
+            retrieved = [s["title"] for s in result["sources"]]
+            relevant = item.get("relevant_paper_ids", [])
 
             hit_rates.append(hit_rate(retrieved, relevant, k))
             ndcgs.append(ndcg(retrieved, relevant, k))
@@ -110,7 +118,7 @@ def run(run_name: str) -> None:
             # Optional RAGAS scoring
             try:
                 from eval.ragas_scorer import score_and_log
-                from rag.vector_store import VectorStoreManager
+
                 scores = score_and_log(
                     q,
                     result["answer"].get("landscape_summary", ""),
@@ -125,22 +133,22 @@ def run(run_name: str) -> None:
 
         lat_sorted = sorted(latencies)
         metrics = {
-            f"hit_rate_at_{k}":      avg(hit_rates),
-            f"ndcg_at_{k}":          avg(ndcgs),
-            "faithfulness_mean":     avg(f_scores),
+            f"hit_rate_at_{k}": avg(hit_rates),
+            f"ndcg_at_{k}": avg(ndcgs),
+            "faithfulness_mean": avg(f_scores),
             "answer_relevancy_mean": avg(r_scores),
-            "latency_p50_ms":        lat_sorted[len(lat_sorted) // 2],
-            "latency_p95_ms":        lat_sorted[int(len(lat_sorted) * 0.95)],
-            "eval_set_size":         len(items),
+            "latency_p50_ms": lat_sorted[len(lat_sorted) // 2],
+            "latency_p95_ms": lat_sorted[int(len(lat_sorted) * 0.95)],
+            "eval_set_size": len(items),
         }
         mlflow.log_metrics(metrics)
 
-        print(f"\n── Results ───────────────────────────────────────")
+        print("\n── Results ───────────────────────────────────────")
         for name, val in metrics.items():
             bar = "█" * int(val * 20) if 0 <= val <= 1 else ""
             print(f"  {name:<30} {val:>7.4f}  {bar}")
 
-        print(f"\n  View in MLflow:  make mlflow-ui\n")
+        print("\n  View in MLflow:  make mlflow-ui\n")
 
 
 if __name__ == "__main__":

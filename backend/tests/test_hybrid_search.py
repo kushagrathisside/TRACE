@@ -23,7 +23,10 @@ def _doc(title: str, abstract: str = "") -> Document:
 
 
 DOCS = [
-    _doc("Graph Neural Networks for Molecular Property Prediction", "GNN molecular chemistry"),
+    _doc(
+        "Graph Neural Networks for Molecular Property Prediction",
+        "GNN molecular chemistry",
+    ),
     _doc("Attention Is All You Need", "transformer self-attention NLP"),
     _doc("BERT Pre-training Transformers", "bidirectional encoder language model"),
     _doc("Federated Learning for Privacy", "distributed training privacy data"),
@@ -39,6 +42,7 @@ def build_index():
 
 
 # ── Search ────────────────────────────────────────────────────────────────────
+
 
 def test_search_returns_results():
     searcher = HybridSearcher.get()
@@ -75,6 +79,7 @@ def test_invalidate_clears_index():
 
 # ── RRF Fusion ────────────────────────────────────────────────────────────────
 
+
 def test_rrf_boosts_documents_in_both_lists():
     doc_a = _doc("Shared Document A")
     doc_b = _doc("Only in Vector B")
@@ -82,7 +87,7 @@ def test_rrf_boosts_documents_in_both_lists():
 
     # doc_a appears in both lists → should rank highly after fusion
     vector_list = [(0.3, doc_a), (0.2, doc_b)]
-    bm25_list   = [(5.0, doc_a), (3.0, doc_c)]
+    bm25_list = [(5.0, doc_a), (3.0, doc_c)]
 
     fused = HybridSearcher.rrf(vector_list, bm25_list, top_n=3)
     titles = [d.metadata["paper_title"] for d in fused]
@@ -92,7 +97,7 @@ def test_rrf_boosts_documents_in_both_lists():
 def test_rrf_returns_at_most_top_n():
     docs = [_doc(f"Doc {i}") for i in range(5)]
     vector_list = [(float(i), d) for i, d in enumerate(docs)]
-    bm25_list   = [(float(i), d) for i, d in enumerate(docs)]
+    bm25_list = [(float(i), d) for i, d in enumerate(docs)]
     fused = HybridSearcher.rrf(vector_list, bm25_list, top_n=3)
     assert len(fused) <= 3
 

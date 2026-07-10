@@ -27,7 +27,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: lint-${{ hashFiles('backend/requirements.txt') }}
+          key: lint-${{ hashFiles('requirements.txt') }}
 
       - name: Install lint dependencies
         run: pip install ruff
@@ -61,12 +61,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ hashFiles('backend/requirements.txt') }}
+          key: pip-${{ hashFiles('requirements.txt') }}
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install -r requirements.txt
           pip install pytest pytest-cov
 
       - name: Run unit tests
@@ -111,12 +111,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ hashFiles('backend/requirements.txt') }}
+          key: pip-${{ hashFiles('requirements.txt') }}
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install -r requirements.txt
           pip install pytest httpx
 
       - name: Run API tests

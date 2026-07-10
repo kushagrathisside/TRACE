@@ -24,10 +24,11 @@ Model: cross-encoder/ms-marco-MiniLM-L-6-v2
 """
 
 import logging
-import numpy as np
-from sentence_transformers import CrossEncoder
-from langchain_core.documents import Document
+
 import config
+import numpy as np
+from langchain_core.documents import Document
+from sentence_transformers import CrossEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,16 @@ class Reranker:
 
     def __init__(self) -> None:
         logger.info(f"Loading reranker: {config.RERANKER_MODEL_NAME}")
-        self.model = CrossEncoder(config.RERANKER_MODEL_NAME, max_length=512)
+        try:
+            if not config.RERANKER_MODEL_NAME:
+                raise ValueError("Reranker model name is empty")
+            self.model = CrossEncoder(config.RERANKER_MODEL_NAME, max_length=512)
+        except Exception as exc:
+            logger.warning(
+                f"Failed to load CrossEncoder ({exc}). "
+                "Falling back to Dummy Reranker (no-op)."
+            )
+            self.model = None
 
     def rerank(
         self,
@@ -64,6 +74,13 @@ class Reranker:
             )
             for d in docs
         ]
+
+        if self.model is None:
+            # Dummy fallback: just return the docs as-is with a fake descending score
+            logger.debug("Using dummy reranker fallback.")
+            ranked = [(float(len(docs) - i), doc) for i, doc in enumerate(docs)]
+            return ranked[:top_k]
+
         scores: np.ndarray = self.model.predict(pairs)
         ranked = sorted(
             zip(scores.tolist(), docs),

@@ -20,8 +20,10 @@ stale data.  `invalidate()` drops and recreates the collection.
 """
 
 import json
-import uuid
 import logging
+import uuid
+from datetime import datetime, timezone
+
 import chromadb
 import config
 
@@ -53,6 +55,13 @@ class SemanticCache:
         dist = distances[0]
         if dist < config.CACHE_HIT_DISTANCE:
             meta = result["metadatas"][0][0]
+
+            created_at = meta.get("created_at", 0)
+            now = datetime.now(timezone.utc).timestamp()
+            if now - created_at > config.CACHE_MAX_AGE_DAYS * 86400:
+                logger.debug(f"semantic_cache EXPIRED dist={dist:.4f}")
+                return None
+
             logger.info(f"semantic_cache HIT  dist={dist:.4f}")
             return {
                 "answer": json.loads(meta["answer"]),
@@ -71,10 +80,13 @@ class SemanticCache:
         self._col.upsert(
             embeddings=[query_embedding],
             documents=[query],
-            metadatas=[{
-                "answer": json.dumps(answer),
-                "sources": json.dumps(sources),
-            }],
+            metadatas=[
+                {
+                    "answer": json.dumps(answer),
+                    "sources": json.dumps(sources),
+                    "created_at": datetime.now(timezone.utc).timestamp(),
+                }
+            ],
             ids=[str(uuid.uuid4())],
         )
 

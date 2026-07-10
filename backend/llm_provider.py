@@ -6,19 +6,20 @@ import os
 for _k in [k for k in os.environ if "proxy" in k.lower()]:
     del os.environ[_k]
 
-from langchain_ollama import ChatOllama
-from langchain_huggingface import HuggingFaceEmbeddings
-import config
+import config  # noqa: E402
+from langchain_ollama import ChatOllama, OllamaEmbeddings  # noqa: E402
 
 # Module-level singletons — expensive to build, safe to reuse across requests.
-_embeddings: HuggingFaceEmbeddings | None = None
+_embeddings: OllamaEmbeddings | None = None
 _llm: ChatOllama | None = None
 _json_llm: ChatOllama | None = None
 
 
 class LLMProvider:
     @staticmethod
-    def get_llm(model_name: str = config.LLM_MODEL_NAME, temperature: float = 0.1) -> ChatOllama:
+    def get_llm(
+        model_name: str = config.LLM_MODEL_NAME, temperature: float = 0.1
+    ) -> ChatOllama:
         """
         Chat model for generation.  keep_alive=-1 keeps the model resident so
         its KV-cache (especially the static system-prompt prefix) is reused
@@ -55,16 +56,15 @@ class LLMProvider:
         return _json_llm
 
     @staticmethod
-    def get_embeddings() -> HuggingFaceEmbeddings:
+    def get_embeddings() -> OllamaEmbeddings:
         """
-        Singleton embedding model.  Downloaded once (~90 MB), then kept in RAM.
-        normalize_embeddings=True ensures unit-norm vectors — required for
-        cosine distance to equal 1 - cosine_similarity exactly.
+        Singleton embedding model. Now runs locally via Ollama to bypass
+        HuggingFace network timeouts.
         """
         global _embeddings
         if _embeddings is None:
-            _embeddings = HuggingFaceEmbeddings(
-                model_name=config.EMBEDDING_MODEL_NAME,
-                encode_kwargs={"normalize_embeddings": True},
+            _embeddings = OllamaEmbeddings(
+                model=config.EMBEDDING_MODEL_NAME,
+                base_url=config.OLLAMA_BASE_URL,
             )
         return _embeddings

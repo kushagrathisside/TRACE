@@ -123,9 +123,9 @@ Bi-encoder retrieval is fast but approximate — it encodes query and document i
 ### Structured JSON Output + Hallucination Guard
 `ChatOllama(format="json")` forces the model to emit valid JSON. A concrete schema example in the system prompt constrains the output shape. Pydantic validates and coerces the result. The exception handler now distinguishes `json.JSONDecodeError`, `pydantic.ValidationError`, and unexpected runtime errors separately, so failures are logged at the correct severity level.
 
-The post-parse hallucination guard cross-checks every cited paper title against the retrieved source documents using two passes:
-1. **Substring match** (high confidence, low false-positive rate)
-2. **Jaccard word overlap ≥ 0.75** (fuzzy fallback — raised from 0.5 to reduce false positives)
+The post-parse hallucination guard cross-checks every cited paper against the retrieved source documents. It uses a strict ID-based approach first:
+1. **Exact `paper_id` Match**: The model is prompted to output the Semantic Scholar `paper_id` alongside the title. If the ID matches a retrieved source, it is 100% grounded.
+2. **Fuzzy Fallback**: If the ID is malformed, it falls back to a title substring match or Jaccard word overlap (≥ 0.75).
 
 Fabricated references are silently dropped. This handles the main failure mode of small models (llama3.2 3B) in RAG: citing plausible but non-existent papers.
 
@@ -133,10 +133,10 @@ Fabricated references are silently dropped. This handles the main failure mode o
 `keep_alive=-1` keeps the model resident in memory indefinitely. The critical benefit: Ollama caches the KV state for the system prompt prefix. Since the same prompt prefix is sent on every query, the ~800 system-prompt tokens are only encoded once and reused from KV cache on subsequent calls. `keep_alive=0` (default) would evict the model after 5 minutes, forcing a cold-start KV re-encode. The cost: persistent RAM/VRAM usage (~2GB for llama3.2 3B).
 
 ### Rate Limiting (slowapi)
-`@limiter.limit("10/minute")` on `/api/query` uses `slowapi` (a FastAPI-compatible port of `flask-limiter`). Key function is remote IP address. Returns HTTP 429 with a proper `Retry-After` header. Prevents a single student from monopolising Ollama.
+`@limiter.limit("10/minute")` on `/api/query` uses `slowapi` (a FastAPI-compatible port of `flask-limiter`). Key function is remote IP address. Returns HTTP 429 with a proper `Retry-After` header. Admin endpoints (`/api/sync`, `/api/people`, etc.) are similarly rate-limited to 10 requests per minute to prevent brute-forcing the shared password.
 
 ### File Locking (portalocker)
-`people.json` is written with a `portalocker` exclusive lock on a sidecar `.lock` file. This prevents JSON corruption when two admins add/remove people simultaneously. Reads are unlocked (Python's json.loads over a small file is OS-level atomic).
+`people.json` and `sync_status.json` operations utilize `portalocker` for cross-process file locking via sidecar `.lock` files. This prevents JSON corruption when two admins add/remove people simultaneously, and prevents multi-worker concurrency clashes if two admin requests attempt to trigger the sync pipeline at the same time. Reads are unlocked.
 
 ### Incremental Sync
 `sync_status.json` persists `per_person[s2_id]["last_year"]` — the most recent publication year seen for each author. On the next sync, the Semantic Scholar API is called with `year=<last_year>-`, fetching only papers from that year onward. A new person always gets a full historical fetch. This turns a 3-hour full re-sync into a ~30-second delta sync.
@@ -174,10 +174,12 @@ The `X-Admin-Password` header is compared using `hmac.compare_digest()` rather t
 | `RETRIEVAL_K` | `5` | No | Final results after reranking |
 | `MIN_SIMILARITY_DISTANCE` | `0.85` | No | Threshold to filter irrelevant docs |
 | `CACHE_HIT_DISTANCE` | `0.08` | No | Semantic cache similarity threshold |
+| `CACHE_MAX_AGE_DAYS` | `15` | No | Number of days before a cache entry expires |
 | `RECENCY_WEIGHT` | `0.01` | No | RRF score bonus per year of recency |
 | `MAX_ABSTRACT_CHARS` | computed | No | Characters of abstract per chunk in LLM prompt |
 | `RATE_LIMIT_QUERIES` | `"10/minute"` | No | Per-IP rate limit on `/api/query` |
 | `RATE_LIMIT_DEFAULT` | `"60/minute"` | No | Global default rate limit |
+| `RATE_LIMIT_ADMIN` | `"10/minute"` | No | Global rate limit on admin routes |
 | `SEMANTIC_SCHOLAR_API_KEY` | `""` | No | Optional; raises rate limit to 10 req/s |
 | `ENABLE_RAGAS_SCORING` | `"false"` | No | Set to `"true"` to score every live query with RAGAS |
 
@@ -521,7 +523,6 @@ Understanding what the system *cannot* do well is as important as knowing what i
 - **No thesis/project indexing.** Student theses that were never published are not on Semantic Scholar and therefore not in the DB. A separate manual ingestion pipeline would be needed.
 
 ### Retrieval
-- **Hallucination guard is a heuristic.** The Jaccard+substring title-match check catches most fabrications (threshold raised to 0.75 from 0.5), but can miss heavily paraphrased titles. A stronger fix: store Semantic Scholar paper IDs in the structured response and validate against IDs, not strings.
 - **Query expansion can backfire.** For very specific technical queries, expanding with related keywords may dilute the embedding and pull in tangentially related papers. Consider making expansion conditional on query length (skip for queries > 20 words).
 - **No recency bias.** A 2024 paper and a 2010 paper with identical abstracts score identically. The `RECENCY_WEIGHT` config adds a small RRF bonus for newer papers, but the effect is subtle. A more aggressive recency discount would help for "what's recent in X" queries.
 
@@ -531,7 +532,5 @@ Understanding what the system *cannot* do well is as important as knowing what i
 
 ### Operations
 - **Single admin password.** No audit trail of who made what change. For multi-admin deployments, replace with per-user API keys stored hashed.
-- **No concurrent sync protection beyond status check.** The "already running" guard checks an in-memory dict. If two server workers run (e.g., `uvicorn --workers 2`), two syncs can run simultaneously. Use a file-lock or DB flag for multi-worker deployments.
-- **Semantic cache never expires by age.** Cached answers from 6 months ago are served indefinitely until the next sync. Add a `created_at` field to cache entries and evict those older than N days.
 
 > **Remaining feature upgrades and detailed enhancement backlog:** see [feature-upgrades.md](feature-upgrades.md).

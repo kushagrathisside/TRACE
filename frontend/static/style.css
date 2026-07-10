@@ -41,7 +41,7 @@ a:hover { text-decoration: underline; }
 .page-header nav a { color: rgba(255,255,255,0.85); font-size: 0.9rem; margin-left: 1.5rem; }
 .page-header nav a:hover { color: white; text-decoration: none; }
 
-.container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
+.container { max-width: 90%; margin: 0 auto; padding: 2rem 1.5rem; }
 
 /* ── Card ────────────────────────────────────────────────────────────────── */
 .card {

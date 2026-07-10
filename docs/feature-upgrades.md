@@ -31,84 +31,9 @@ Last reviewed: 2026-06-09
 
 ---
 
-### 🔴 Rate Limiting on Admin Endpoints
-**Problem:** `/api/sync`, `/api/people`, and `/api/author/search` have no rate limit. A brute-force attempt against the admin password (even with `hmac.compare_digest`) is unconstrained.
-
-**Implementation:**
-- Apply `@limiter.limit("30/minute")` to all admin endpoints
-- Apply `@limiter.limit("5/minute")` specifically to auth-gated endpoints as a secondary guard
-- Log failed auth attempts with IP to `audit.jsonl`
-
-**Effort:** 2 hours
-
----
-
-### 🟡 Concurrent Sync Protection (Multi-Worker)
-**Problem:** The "already running" guard checks an in-memory dict. With `uvicorn --workers 2`, two processes each have independent dicts, so two syncs can run simultaneously and corrupt the ChromaDB state.
-
-**Implementation:**
-- Write a `.sync.lock` file in `data/` at sync start using `portalocker` exclusive lock
-- Release the lock after sync completes or on exception
-- The in-memory guard remains as a fast-path; the file lock is the cross-process guard
-
-**Effort:** 2 hours
-
----
-
-### 🟡 Semantic Cache Age Eviction
-**Problem:** Cached answers accumulate indefinitely. An answer cached 6 months ago may be stale (new papers added since, or the LLM prompt improved).
-
-**Implementation:**
-- Add `created_at` field (UTC ISO timestamp) when writing cache entries
-- In `SemanticCache.get()`, check age: if `now - created_at > CACHE_MAX_AGE_DAYS` (default 30), treat as a miss
-- Add `CACHE_MAX_AGE_DAYS` to `config.py`
-
-**Effort:** 2 hours
-
----
 
 ## 2. Data Quality & Ingestion
 
-### 🔴 Metadata Validation Schema (Pydantic)
-**Problem:** Document metadata is passed as bare dicts throughout the codebase. Typos in key names (e.g., `"paper_titlee"`) fail silently and return empty strings in responses.
-
-**Implementation:**
-Create `backend/rag/schemas.py`:
-```python
-from pydantic import BaseModel
-
-class DocumentMetadata(BaseModel):
-    paper_id: str
-    paper_title: str
-    year: int | None = None
-    venue: str = ""
-    authors: str = ""
-    institute_authors: str = ""
-    institute_roles: str = ""
-    departments: str = ""
-    paper_url: str = ""
-
-    class Config:
-        extra = "forbid"
-```
-Validate in `ingestor.py` before creating `Document` objects. Invalid metadata is logged as a warning and the paper is skipped.
-
-**Effort:** 3 hours
-
----
-
-### 🔴 Sync Degraded Status
-**Problem:** If >30% of people fail to sync (API errors, timeouts), the sync finishes with status `"done"` but the DB is materially incomplete. Admins see no warning.
-
-**Implementation:**
-- Count errors during the per-person loop
-- At the end of `run_ingestion()`, if `len(errors) > len(s2_to_person) * 0.3`, set `sync_status["status"] = "partial"` instead of `"done"`
-- Log a structured `sync_complete` event with `total_papers`, `unique_papers`, `people_synced`, `errors`, `duration_seconds`
-- Surface `"partial"` status distinctly in the admin panel UI
-
-**Effort:** 2 hours
-
----
 
 ### 🟡 Full-Text Indexing (PDF Abstracts)
 **Problem:** Many papers have relevant content in their body that is not captured in the abstract. The system can only see what Semantic Scholar abstracts expose.
@@ -163,17 +88,6 @@ Validate in `ingestor.py` before creating `Document` objects. Invalid metadata i
 
 ---
 
-### 🟡 Stronger Hallucination Guard (ID-Based)
-**Problem:** The current Jaccard title-match guard can miss heavily paraphrased titles. A paper cited as "The Transformer Architecture" may be the same as "Attention Is All You Need" — the guard will drop it.
-
-**Implementation:**
-- In `chain.py`, add `paper_id` to `PaperReference` schema (optional field)
-- Instruct the LLM to include the Semantic Scholar paper ID from context in its JSON output
-- In the hallucination guard, cross-check by `paper_id` first; fall back to title matching only if no ID was provided
-
-**Effort:** 4 hours
-
----
 
 ### 🟡 Recency Bias Tuning
 **Problem:** `RECENCY_WEIGHT=0.01` adds a subtle bonus to newer papers but is likely too small to meaningfully influence rankings. "What's recent in X" queries still surface old papers.
@@ -414,16 +328,12 @@ services:
 | Area | Item | Priority | Effort |
 |------|------|----------|--------|
 | Security | Per-user API keys | 🔴 | 1 day |
-| Security | Rate limit admin endpoints | 🔴 | 2 hrs |
-| Security | Concurrent sync lock | 🟡 | 2 hrs |
-| Security | Cache age eviction | 🟡 | 2 hrs |
-| Data | Metadata Pydantic schema | 🔴 | 3 hrs |
-| Data | Sync degraded status | 🔴 | 2 hrs |
+
 | Data | Full-text PDF indexing | 🟡 | 1 day |
 | Data | Manual thesis ingestion | 🟡 | 1 day |
 | Data | Email validation | 🟢 | 30 min |
 | Retrieval | Conditional query expansion | 🟡 | 1 hr |
-| Retrieval | ID-based hallucination guard | 🟡 | 4 hrs |
+
 | Retrieval | Recency bias tuning | 🟡 | 4 hrs |
 | Retrieval | Per-stage latency logging | 🟢 | 1 hr |
 | Generation | Upgrade to llama3.1:8b | 🟡 | 30 min |

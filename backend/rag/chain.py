@@ -23,29 +23,34 @@ dropped.
 
 import json
 import logging
-from pydantic import BaseModel, Field, ValidationError
-from langchain_core.documents import Document
-from langchain_core.messages import SystemMessage, HumanMessage
-from llm_provider import LLMProvider
+
 import config
+from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage, SystemMessage
+from llm_provider import LLMProvider
+from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
 
 # ── Response schema ───────────────────────────────────────────────────────────
 
+
 class PaperReference(BaseModel):
+    paper_id: str = ""
     title: str
     year: int | None = None
     authors: str = ""
     venue: str = ""
     relevance: str = ""
 
+
 class PersonSuggestion(BaseModel):
     name: str
     role: str = ""
     department: str = ""
     relevant_work: str = ""
+
 
 class ResearchLandscape(BaseModel):
     landscape_summary: str
@@ -65,7 +70,7 @@ Return ONLY valid JSON with this exact structure — no prose, no markdown fence
 {{
   "landscape_summary": "2-3 sentences situating the idea within institute work",
   "related_papers": [
-    {{"title": "exact title", "year": 2023, "authors": "Name1, Name2", "venue": "NeurIPS", "relevance": "one sentence"}}
+    {{"paper_id": "exact ID", "title": "exact title", "year": 2023, "authors": "Name1, Name2", "venue": "NeurIPS", "relevance": "one sentence"}}
   ],
   "people_to_consult": [
     {{"name": "Dr. X", "role": "faculty", "department": "CS", "relevant_work": "brief note"}}
@@ -84,6 +89,7 @@ Context:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _format_context(docs: list[Document]) -> str:
     """
     Format retrieved documents into a prompt context block.
@@ -101,6 +107,7 @@ def _format_context(docs: list[Document]) -> str:
         m = d.metadata
         parts.append(
             f"PAPER: {m.get('paper_title', '')}\n"
+            f"ID: {m.get('paper_id', '')}\n"
             f"Year: {m.get('year', '')}  Venue: {m.get('venue', '')}\n"
             f"All Authors: {m.get('authors', '')}\n"
             f"Institute Authors: {m.get('institute_authors', '')} "
@@ -116,15 +123,18 @@ def _hallucination_guard(
     landscape: ResearchLandscape,
     source_docs: list[Document],
 ) -> ResearchLandscape:
-    """Remove any cited paper whose title cannot be matched to retrieved sources."""
-    source_titles = {
-        d.metadata.get("paper_title", "").lower()
-        for d in source_docs
+    """Remove any cited paper whose title or ID cannot be matched to retrieved sources."""
+    source_ids = {
+        d.metadata.get("paper_id") for d in source_docs if d.metadata.get("paper_id")
     }
+    source_titles = {d.metadata.get("paper_title", "").lower() for d in source_docs}
 
-    def _is_grounded(paper_title: str) -> bool:
-        """Check if paper title matches a source title (substring or fuzzy match)."""
-        title_lower = paper_title.lower()
+    def _is_grounded(paper: PaperReference) -> bool:
+        """Check if paper matches a source ID, or fallback to fuzzy title match."""
+        if paper.paper_id and paper.paper_id in source_ids:
+            return True
+
+        title_lower = paper.title.lower()
         title_words = set(title_lower.split())
 
         for source_title in source_titles:
@@ -143,15 +153,18 @@ def _hallucination_guard(
 
     valid: list[PaperReference] = []
     for paper in landscape.related_papers:
-        if _is_grounded(paper.title):
+        if _is_grounded(paper):
             valid.append(paper)
         else:
-            logger.warning(f"Hallucination dropped: '{paper.title}'")
+            logger.warning(
+                f"Hallucination dropped: '{paper.title}' (ID: '{paper.paper_id}')"
+            )
     landscape.related_papers = valid
     return landscape
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def generate_answer(query: str, docs: list[Document]) -> ResearchLandscape:
     """
@@ -164,10 +177,12 @@ def generate_answer(query: str, docs: list[Document]) -> ResearchLandscape:
 
     response = None
     try:
-        response = llm.invoke([
-            SystemMessage(content=system),
-            HumanMessage(content=query),
-        ])
+        response = llm.invoke(
+            [
+                SystemMessage(content=system),
+                HumanMessage(content=query),
+            ]
+        )
         data = json.loads(response.content)
         landscape = ResearchLandscape(**data)
     except json.JSONDecodeError as exc:

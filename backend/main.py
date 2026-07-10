@@ -1,9 +1,9 @@
-import os
-import sys
 import asyncio
+import hmac
 import json
 import logging
-import hmac
+import os
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,21 +12,20 @@ from typing import Literal
 # Make backend/ the importable root
 sys.path.insert(0, os.path.dirname(__file__))
 
+import config
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from ingestion import ingestor, people_registry
+from ingestion.scholar_client import search_author
 from pydantic import BaseModel
+from rag import pipeline
+from rag.vector_store import VectorStoreManager
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-
-import config
-from ingestion import ingestor, people_registry
-from ingestion.scholar_client import search_author
-from rag import pipeline
-from rag.vector_store import VectorStoreManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +38,7 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[config.RATE_LIMIT_DEFAULT],
 )
+
 
 # ── Startup / shutdown ────────────────────────────────────────────────────────
 def _warmup() -> None:
@@ -53,8 +53,9 @@ def _warmup() -> None:
     in RAM/VRAM with its KV-cache primed.  Non-fatal: if Ollama is not yet
     running the server still starts normally and the LLM loads on first query.
     """
-    from llm_provider import LLMProvider
     from langchain_core.messages import HumanMessage
+    from llm_provider import LLMProvider
+
     try:
         emb = LLMProvider.get_embeddings()
         emb.embed_query("warm-up")
@@ -79,13 +80,19 @@ async def lifespan(app: FastAPI):
     asyncio.ensure_future(loop.run_in_executor(None, _warmup))
     yield
 
-app = FastAPI(title="TRACE — Trustworthy Retrieval with Automated Continuous Evaluation", lifespan=lifespan)
+
+app = FastAPI(
+    title="TRACE — Trustworthy Retrieval with Automated Continuous Evaluation",
+    lifespan=lifespan,
+)
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-cors_origins = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else []
+cors_origins = (
+    os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else []
+)
 if not cors_origins:
     raise ValueError(
         "CORS_ORIGINS environment variable not set. "
@@ -115,9 +122,11 @@ def require_admin(x_admin_password: str = Header(default="")) -> None:
 # Frontend routes
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.get("/", include_in_schema=False)
 def student_page():
     return FileResponse(str(FRONTEND / "index.html"))
+
 
 @app.get("/admin", include_in_schema=False)
 def admin_page():
@@ -127,6 +136,7 @@ def admin_page():
 # ═══════════════════════════════════════════════════════════════════════════════
 # Health check
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 @app.get("/health")
 async def health():
@@ -149,7 +159,6 @@ async def health():
         resp = httpx.get(
             f"{config.OLLAMA_BASE_URL}/api/tags",
             timeout=2,
-            proxies={},  # type: ignore[arg-type]
         )
         resp.raise_for_status()
         models = [m["name"] for m in resp.json().get("models", [])]
@@ -175,8 +184,11 @@ async def health():
 # Student API
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class QueryRequest(BaseModel):
     idea: str
+    bypass_cache: bool = False
+
 
 @app.post("/api/query")
 @limiter.limit(config.RATE_LIMIT_QUERIES)
@@ -190,9 +202,9 @@ async def query_endpoint(request: Request, req: QueryRequest):
         raise HTTPException(status_code=400, detail="Idea cannot be empty")
 
     try:
-        resp = httpx.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=2, proxies={})
+        resp = httpx.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=2)
         resp.raise_for_status()
-    except Exception as exc:
+    except Exception:
         raise HTTPException(
             status_code=503,
             detail="LLM service unavailable. Check that Ollama is running.",
@@ -200,7 +212,9 @@ async def query_endpoint(request: Request, req: QueryRequest):
 
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, pipeline.run, req.idea)
+        result = await loop.run_in_executor(
+            None, pipeline.run, req.idea, req.bypass_cache
+        )
         return result
     except Exception as exc:
         logger.exception("Pipeline error")
@@ -209,10 +223,12 @@ async def query_endpoint(request: Request, req: QueryRequest):
 
 # ── Feedback ──────────────────────────────────────────────────────────────────
 
+
 class FeedbackRequest(BaseModel):
     query: str
     rating: Literal["up", "down"]
     comment: str = ""
+
 
 @app.post("/api/feedback")
 async def feedback(req: FeedbackRequest):
@@ -234,7 +250,8 @@ async def feedback(req: FeedbackRequest):
 
 
 @app.get("/api/feedback/analysis")
-def feedback_analysis(x_admin_password: str = Header(default="")):
+@limiter.limit(config.RATE_LIMIT_ADMIN)
+def feedback_analysis(request: Request, x_admin_password: str = Header(default="")):
     """
     Analyse accumulated feedback to surface system quality trends.
     Returns summary stats: thumbs-down rate, RAGAS scores if enabled, recommendations.
@@ -243,6 +260,7 @@ def feedback_analysis(x_admin_password: str = Header(default="")):
     try:
         import io
         import sys
+
         from eval.analyse_feedback import run as analyse_feedback
 
         old_stdout = sys.stdout
@@ -263,8 +281,11 @@ def feedback_analysis(x_admin_password: str = Header(default="")):
 # Admin: People
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.get("/api/people")
+@limiter.limit(config.RATE_LIMIT_ADMIN)
 def list_people(
+    request: Request,
     x_admin_password: str = Header(default=""),
     page: int = 1,
     page_size: int = 100,
@@ -286,11 +307,11 @@ def list_people(
     pages = -(-total // page_size)  # ceil division, now safe
 
     return {
-        "people":    all_people[start : start + page_size],
-        "total":     total,
-        "page":      page,
+        "people": all_people[start : start + page_size],
+        "total": total,
+        "page": page,
         "page_size": page_size,
-        "pages":     pages,
+        "pages": pages,
     }
 
 
@@ -301,15 +322,23 @@ class PersonRequest(BaseModel):
     email: str
     semantic_scholar_id: str
 
+
 @app.post("/api/people", status_code=201)
-def add_person(req: PersonRequest, x_admin_password: str = Header(default="")):
+@limiter.limit(config.RATE_LIMIT_ADMIN)
+def add_person(
+    request: Request, req: PersonRequest, x_admin_password: str = Header(default="")
+):
     require_admin(x_admin_password)
     return people_registry.add_person(
         req.name, req.role, req.department, req.email, req.semantic_scholar_id
     )
 
+
 @app.delete("/api/people/{person_id}")
-def delete_person(person_id: str, x_admin_password: str = Header(default="")):
+@limiter.limit(config.RATE_LIMIT_ADMIN)
+def delete_person(
+    request: Request, person_id: str, x_admin_password: str = Header(default="")
+):
     """
     Remove person from registry AND clean up their papers in ChromaDB:
       - Papers where they were the sole institute author are deleted.
@@ -338,8 +367,11 @@ def delete_person(person_id: str, x_admin_password: str = Header(default="")):
 # Admin: Sync
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.post("/api/sync")
+@limiter.limit(config.RATE_LIMIT_ADMIN)
 def trigger_sync(
+    request: Request,
     background_tasks: BackgroundTasks,
     x_admin_password: str = Header(default=""),
 ):
@@ -352,11 +384,23 @@ def trigger_sync(
         # Post-sync: rebuild BM25, invalidate semantic cache, reset VS singleton
         pipeline.post_sync_rebuild()
 
+        try:
+            from eval.self_retrieval import run as run_self_retrieval
+
+            rate = run_self_retrieval(k=5, sample=200)
+            if rate < 0.90:
+                ingestor.sync_status["status"] = "degraded"
+                ingestor._save_status(ingestor.sync_status)
+        except Exception as e:
+            logger.error(f"Self-retrieval eval failed: {e}")
+
     background_tasks.add_task(_run)
     return {"ok": True, "message": "Sync started"}
 
+
 @app.get("/api/sync/status")
-def sync_status_route(x_admin_password: str = Header(default="")):
+@limiter.limit(config.RATE_LIMIT_ADMIN)
+def sync_status_route(request: Request, x_admin_password: str = Header(default="")):
     require_admin(x_admin_password)
     return ingestor.sync_status
 
@@ -365,15 +409,17 @@ def sync_status_route(x_admin_password: str = Header(default="")):
 # Admin: Stats
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.get("/api/stats")
-def stats(x_admin_password: str = Header(default="")):
+@limiter.limit(config.RATE_LIMIT_ADMIN)
+def stats(request: Request, x_admin_password: str = Header(default="")):
     require_admin(x_admin_password)
     vs = VectorStoreManager.get_or_create()
     return {
-        "total_papers":  vs.count(),
-        "total_people":  len(people_registry.get_all()),
-        "last_sync":     ingestor.sync_status.get("last_sync"),
-        "sync_status":   ingestor.sync_status.get("status"),
+        "total_papers": vs.count(),
+        "total_people": len(people_registry.get_all()),
+        "last_sync": ingestor.sync_status.get("last_sync"),
+        "sync_status": ingestor.sync_status.get("status"),
     }
 
 
@@ -381,11 +427,18 @@ def stats(x_admin_password: str = Header(default="")):
 # Admin: Author search proxy
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class AuthorSearchRequest(BaseModel):
     name: str
 
+
 @app.post("/api/author/search")
-def author_search(req: AuthorSearchRequest, x_admin_password: str = Header(default="")):
+@limiter.limit(config.RATE_LIMIT_ADMIN)
+def author_search(
+    request: Request,
+    req: AuthorSearchRequest,
+    x_admin_password: str = Header(default=""),
+):
     require_admin(x_admin_password)
     try:
         return {"results": search_author(req.name)}

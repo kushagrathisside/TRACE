@@ -1,0 +1,62 @@
+# Deployment & Production Guide
+
+This guide details how to move TRACE from a local development environment into a production deployment.
+
+## 1. Environment Configuration (`.env`)
+Ensure your `.env` file is heavily guarded and strictly configured:
+```ini
+# Security
+ADMIN_PASSWORD=your_secure_random_string
+CORS_ORIGINS=https://your-institute-domain.edu
+
+# Rate Limiting
+RATE_LIMIT_DEFAULT=60/minute
+RATE_LIMIT_QUERIES=10/minute
+RATE_LIMIT_ADMIN=10/minute
+
+# Cache
+CACHE_MAX_AGE_DAYS=15
+```
+
+## 2. Model Hosting (Ollama)
+For production, running Ollama on the same machine as the web server is not recommended unless it's a dedicated GPU node.
+- **Dedicated GPU Server**: Install Ollama and set `OLLAMA_HOST=0.0.0.0` so it accepts external connections. Set `OLLAMA_BASE_URL` in the FastAPI `.env` to point to the dedicated GPU box.
+- **Cloud LLM**: If latency is an issue, swap out `LLMProvider` in `backend/llm_provider.py` to use a cloud provider like OpenAI or Anthropic.
+
+## 3. Web Server (Uvicorn / Gunicorn)
+**CRITICAL WARNING**: Because ChromaDB currently runs locally inside the application process in single-tenant mode, **you must only run a single Uvicorn worker process.** 
+
+Starting multiple workers (e.g. `gunicorn -w 4`) will cause database locking conflicts and corruption for both ChromaDB and the `people.json` file.
+
+To run the application safely:
+```bash
+uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1
+```
+
+## 4. Reverse Proxy (Nginx)
+Expose the FastAPI app through an Nginx reverse proxy to handle SSL termination and static file serving.
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name trace.institute.edu;
+
+    ssl_certificate /etc/letsencrypt/live/trace/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/trace/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+## 5. Background Jobs (Cron)
+While the sync can be triggered manually via the Admin Dashboard, it's recommended to automate this process. Set up a nightly cron job to ping the sync endpoint:
+
+```bash
+# Run every night at 2:00 AM
+0 2 * * * curl -X POST https://trace.institute.edu/api/sync -H "X-Admin-Password: your_secure_random_string"
+```

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,16 @@ def _warmup() -> None:
     except Exception as exc:
         logger.warning(f"Embedding warm-up failed: {exc}")
 
+    # Load the cross-encoder here rather than on first use, so its download and
+    # initialisation cost lands at startup and /health can report its real
+    # status without triggering a load.
+    try:
+        from rag.reranker import Reranker
+
+        Reranker.get()
+    except Exception as exc:
+        logger.warning(f"Reranker warm-up failed: {exc}")
+
     try:
         llm = LLMProvider.get_llm()
         llm.invoke([HumanMessage(content="Hi")])
@@ -114,8 +125,24 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND / "static")), name="stat
 
 # ── Auth helper ───────────────────────────────────────────────────────────────
 def require_admin(x_admin_password: str = Header(default="")) -> None:
-    if not hmac.compare_digest(x_admin_password, config.ADMIN_PASSWORD):
+    # compare_digest raises TypeError on non-ASCII str input, which would
+    # surface as a 500 instead of a 401 — compare bytes instead.
+    supplied = (x_admin_password or "").encode("utf-8", "ignore")
+    expected = config.ADMIN_PASSWORD.encode("utf-8", "ignore")
+    if not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="Invalid admin password")
+
+
+async def httpx_get_async(url: str, timeout: float = 2.0):
+    """
+    Async HTTP GET.
+
+    The Ollama reachability probes used a synchronous httpx.get inside async
+    handlers, which parks the event loop for up to `timeout` seconds on every
+    request — including while other users' queries are waiting to be scheduled.
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        return await client.get(url)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -154,9 +181,18 @@ async def health():
     except Exception as exc:
         checks["chromadb"] = {"status": "error", "error": str(exc)}
 
+    # Reranker — a passthrough fallback is a silent ranking regression, so it
+    # is surfaced here rather than left in a startup log line.
+    try:
+        from rag.reranker import Reranker
+
+        checks["reranker"] = Reranker.health()
+    except Exception as exc:
+        checks["reranker"] = {"status": "error", "error": str(exc)}
+
     # Ollama
     try:
-        resp = httpx.get(
+        resp = await httpx_get_async(
             f"{config.OLLAMA_BASE_URL}/api/tags",
             timeout=2,
         )
@@ -190,6 +226,11 @@ class QueryRequest(BaseModel):
     bypass_cache: bool = False
 
 
+#: Longest accepted query.  Beyond this the text is mostly pasted documents,
+#: which blows out the expansion prompt and dilutes the query embedding.
+MAX_QUERY_CHARS = 2000
+
+
 @app.post("/api/query")
 @limiter.limit(config.RATE_LIMIT_QUERIES)
 async def query_endpoint(request: Request, req: QueryRequest):
@@ -197,12 +238,22 @@ async def query_endpoint(request: Request, req: QueryRequest):
     Run the full RAG pipeline (cache → expand → hybrid → rerank → LLM).
     Executes in a thread pool via run_in_executor so the async event loop
     stays free to serve other requests during the ~10-30s LLM generation.
+
+    The response carries a `query_id` that identifies the trace record for this
+    query; the browser sends it back with any feedback so a rating can be tied
+    to what was actually retrieved.
     """
-    if not req.idea.strip():
+    idea = req.idea.strip()
+    if not idea:
         raise HTTPException(status_code=400, detail="Idea cannot be empty")
+    if len(idea) > MAX_QUERY_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Idea is too long (max {MAX_QUERY_CHARS} characters)",
+        )
 
     try:
-        resp = httpx.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=2)
+        resp = await httpx_get_async(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=2)
         resp.raise_for_status()
     except Exception:
         raise HTTPException(
@@ -210,15 +261,20 @@ async def query_endpoint(request: Request, req: QueryRequest):
             detail="LLM service unavailable. Check that Ollama is running.",
         )
 
+    query_id = str(uuid.uuid4())
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, pipeline.run, req.idea, req.bypass_cache
+            None, pipeline.run, idea, req.bypass_cache, query_id
         )
         return result
-    except Exception as exc:
-        logger.exception("Pipeline error")
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception:
+        # Log the detail; return a generic message so internals aren't exposed.
+        logger.exception(f"Pipeline error (query_id={query_id})")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Query failed. Reference: {query_id}",
+        )
 
 
 # ── Feedback ──────────────────────────────────────────────────────────────────
@@ -228,18 +284,31 @@ class FeedbackRequest(BaseModel):
     query: str
     rating: Literal["up", "down"]
     comment: str = ""
+    # Links this rating to the trace record for the answer being rated. Without
+    # it a thumbs-down says a query was bad but not what was retrieved, whether
+    # the reranker ran, or whether the answer came from cache — so the rating
+    # cannot be sliced or acted on.
+    query_id: str = ""
+
+
+MAX_COMMENT_CHARS = 2000
 
 
 @app.post("/api/feedback")
-async def feedback(req: FeedbackRequest):
+@limiter.limit(config.RATE_LIMIT_QUERIES)
+async def feedback(request: Request, req: FeedbackRequest):
     """
     Write a thumbs-up / thumbs-down + optional comment to feedback.jsonl.
     This file can be mined later to evaluate prompt quality or retrieval accuracy.
+
+    Rate-limited on the same budget as queries: an unthrottled endpoint that
+    feeds a quality metric is a quality metric anyone can forge.
     """
     entry = {
-        "query": req.query,
+        "query_id": req.query_id,
+        "query": req.query[:MAX_QUERY_CHARS],
         "rating": req.rating,
-        "comment": req.comment,
+        "comment": req.comment[:MAX_COMMENT_CHARS],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     path = Path(config.FEEDBACK_LOG_PATH)
@@ -258,23 +327,16 @@ def feedback_analysis(request: Request, x_admin_password: str = Header(default="
     """
     require_admin(x_admin_password)
     try:
-        import io
-        import sys
+        # Previously this swapped sys.stdout globally to capture printed output,
+        # which interleaves with concurrent requests in a threaded server.
+        # analyse() returns structured data instead.
+        from eval.analyse_feedback import analyse, format_report
 
-        from eval.analyse_feedback import run as analyse_feedback
-
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            analyse_feedback()
-            output = sys.stdout.getvalue()
-        finally:
-            sys.stdout = old_stdout
-
-        return {"analysis": output}
+        report = analyse()
+        return {"analysis": format_report(report), "metrics": report}
     except Exception as exc:
         logger.error(f"Feedback analysis failed: {exc}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(exc)}")
+        raise HTTPException(status_code=500, detail="Analysis failed")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -381,18 +443,13 @@ def trigger_sync(
 
     def _run():
         ingestor.run_ingestion()
-        # Post-sync: rebuild BM25, invalidate semantic cache, reset VS singleton
-        pipeline.post_sync_rebuild()
-
-        try:
-            from eval.self_retrieval import run as run_self_retrieval
-
-            rate = run_self_retrieval(k=5, sample=200)
-            if rate < 0.90:
-                ingestor.sync_status["status"] = "degraded"
-                ingestor._save_status(ingestor.sync_status)
-        except Exception as e:
-            logger.error(f"Self-retrieval eval failed: {e}")
+        # Post-sync: rebuild BM25, invalidate semantic cache, reset VS singleton.
+        # This also runs the self-retrieval check and returns its hit rate, so
+        # it is not run a second time here.
+        rate = pipeline.post_sync_rebuild()
+        if rate is not None and rate < 0.90:
+            ingestor.sync_status["status"] = "degraded"
+            ingestor._save_status(ingestor.sync_status)
 
     background_tasks.add_task(_run)
     return {"ok": True, "message": "Sync started"}

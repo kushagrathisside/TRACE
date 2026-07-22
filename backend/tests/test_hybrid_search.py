@@ -63,13 +63,68 @@ def test_search_respects_top_k():
     assert len(results) <= 2
 
 
-def test_search_zero_score_docs_not_filtered():
-    # A query with no matching tokens should return docs with score >= 0
+def test_zero_score_docs_are_filtered_out():
+    """
+    A query with no lexical overlap must return NOTHING.
+
+    This test previously asserted the opposite ("zero-score docs not filtered"),
+    codifying the bug it should have caught: rank_bm25 returns a full top-k of
+    0.0-scoring documents for a non-matching query, and passing those to RRF
+    gives pure noise the same rank weight as genuine hits.
+    """
     searcher = HybridSearcher.get()
     results = searcher.search("zzzzqqqq", top_k=5)
-    # All returned scores must be >= 0 (not filtered out)
-    for score, _ in results:
-        assert score >= 0
+    assert results == []
+
+
+def test_all_returned_scores_are_positive():
+    searcher = HybridSearcher.get()
+    results = searcher.search("transformer attention", top_k=5)
+    assert results
+    assert all(score > 0 for score, _ in results)
+
+
+def test_stopword_only_query_returns_nothing():
+    searcher = HybridSearcher.get()
+    assert searcher.search("i want to research the", top_k=5) == []
+
+
+def test_author_names_are_searchable():
+    """Author names live in metadata; they must still reach the BM25 index."""
+    doc = Document(
+        page_content="Title: Some Paper\n\nAbstract: unrelated content here",
+        metadata={
+            "paper_title": "Some Paper",
+            "paper_id": "p_author",
+            "authors": "Kushagra Srivastava, John Doe",
+            "institute_authors": "Kushagra Srivastava",
+        },
+    )
+    HybridSearcher.build(DOCS + [doc])
+    results = HybridSearcher.get().search("Srivastava", top_k=3)
+    assert [d.metadata["paper_id"] for _, d in results] == ["p_author"]
+
+
+def test_punctuation_is_stripped_from_query_tokens():
+    """
+    "Srivastava's" must match "Srivastava" — plain .split() left the apostrophe attached
+    and silently broke the exact-entity lookups BM25 exists to serve.
+
+    Needs a multi-document corpus: BM25 IDF is negative for a term present in
+    every document, so a rare name is only distinguishing when most documents
+    lack it.
+    """
+    doc = Document(
+        page_content="Title: Graph Work\n\nAbstract: graphs",
+        metadata={
+            "paper_title": "Graph Work",
+            "paper_id": "p_punct",
+            "authors": "Kushagra Srivastava",
+        },
+    )
+    HybridSearcher.build(DOCS + [doc])
+    results = HybridSearcher.get().search("Srivastava's work", top_k=3)
+    assert [d.metadata["paper_id"] for _, d in results] == ["p_punct"]
 
 
 def test_invalidate_clears_index():

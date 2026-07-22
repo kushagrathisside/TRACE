@@ -1,0 +1,30 @@
+# Everything not needed to build or run the app. Keeps the build context small
+# and stops host state (a populated index, real people, traces) leaking into an
+# image that might be pushed to a registry.
+.git
+.github
+venv/
+env/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.deepeval/
+
+# Runtime data — the container gets its own volume
+backend/data/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+docs/
+*.md
+!README.md
+LICENSE
+Makefile
+run.sh

@@ -1,0 +1,80 @@
+# TRACE — full stack, no host dependencies beyond Docker.
+#
+#   docker compose up -d          start (CPU)
+#   docker compose --profile gpu up -d --build   start with NVIDIA GPU
+#   docker compose logs -f trace  follow application logs
+#
+# First start pulls ~2.3 GB of model weights into the `ollama-models` volume.
+# That happens once; subsequent starts reuse it.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # `ollama list` proves the daemon is answering, unlike a TCP probe which
+      # succeeds while the server is still initialising.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # One-shot: pull the two models TRACE needs, then exit. Split from the ollama
+  # service so the daemon is not blocked on a multi-gigabyte download, and so
+  # `trace` can wait on completion rather than racing it.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama: { condition: service_healthy }
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "ollama pull ${LLM_MODEL_NAME:-llama3.2:3b} &&
+       ollama pull ${EMBEDDING_MODEL_NAME:-all-minilm}"
+    restart: "no"
+
+  trace:
+    build: .
+    depends_on:
+      ollama-init: { condition: service_completed_successfully }
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      # Inside the network Ollama is a service name, not localhost.
+      OLLAMA_BASE_URL: http://ollama:11434
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      INSTITUTE_NAME: ${INSTITUTE_NAME:-TRACE-Institute}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-llama3.2:3b}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-all-minilm}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # Index, registry, traces and labels persist across container rebuilds.
+      - ./backend/data:/app/backend/data
+      - hf-cache:/home/trace/.cache/huggingface
+    restart: unless-stopped
+
+  # GPU variant. `docker compose --profile gpu up` runs this instead of the CPU
+  # `ollama` service above. Requires the NVIDIA Container Toolkit on the host.
+  ollama-gpu:
+    extends:
+      service: ollama
+    profiles: ["gpu"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  ollama-models:
+  hf-cache:

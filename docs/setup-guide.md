@@ -10,11 +10,16 @@ This guide covers how to set up and run the TRACE server locally using WSL on Wi
 
 ## 2. Pulling the AI Models
 
-Open a PowerShell or WSL terminal and pull the required generative model:
+Open a PowerShell or WSL terminal and pull both required models:
 ```bash
-ollama pull llama3.2:3b
+ollama pull llama3.2:3b     # generation + query expansion
+ollama pull all-minilm      # embeddings
 ```
-*(Note: TRACE uses `all-minilm` for embeddings, which it will automatically download via HuggingFace when the server starts for the first time).*
+Embeddings are served by **Ollama**, not HuggingFace, so `EMBEDDING_MODEL_NAME`
+must be an Ollama tag (`all-minilm`) — a HuggingFace repo path such as
+`all-MiniLM-L6-v2` will not resolve. The cross-encoder reranker is the one
+exception: it loads through `sentence-transformers` and does take a HuggingFace
+path, downloading ~90 MB on first use.
 
 ## 3. Configuration
 
@@ -26,13 +31,31 @@ ollama pull llama3.2:3b
 # ── Models ──
 LLM_MODEL_NAME=llama3.2:3b
 EMBEDDING_MODEL_NAME=all-minilm
-RERANKER_MODEL_NAME=
+RERANKER_MODEL_NAME=cross-encoder/ms-marco-MiniLM-L-6-v2
 
 # ── Admin ──
 ADMIN_PASSWORD=your_secure_password
 ```
 
-*(Note: We leave `RERANKER_MODEL_NAME` empty for local WSL environments to avoid heavy cross-encoder memory requirements and WSL network timeouts).*
+### About the reranker
+
+The cross-encoder is ~22 M parameters (~90 MB) and adds roughly 70 ms per query
+on CPU. It is the single largest contributor to ranking quality in this
+pipeline, so leaving it enabled is strongly recommended even on a laptop.
+
+If you must run without it, set `RERANKER_MODEL_NAME=` (empty). That is treated
+as a deliberate choice rather than a failure — but ranking then falls back to
+fusion order, `/health` reports `reranker.active: false`, and every trace record
+is tagged `reranker_active=false` so no evaluation result can be mistakenly
+attributed to a reranker that was not running.
+
+### Behind a corporate proxy
+
+Ollama runs on localhost and must not be proxied. TRACE appends
+`localhost,127.0.0.1,::1` to `no_proxy` at import time. It deliberately does
+*not* delete your proxy variables: doing so previously broke outbound HTTPS for
+Semantic Scholar ingestion, which surfaced as SSL handshake timeouts pointing
+nowhere near the cause.
 
 ## 4. First-Time Python Setup
 
@@ -46,13 +69,17 @@ pip install -r requirements.txt
 
 ## 5. Starting the Server (The Easy Way)
 
-To start the server with minimal overhead, avoid packaging it with Docker or PyInstaller. We have provided a lightweight Windows batch script (`start.bat`) that boots the server directly inside WSL.
+```bash
+make dev          # reload enabled, reads .env
+```
 
-1. Ensure the **Ollama** app is running in your Windows system tray.
-2. Double-click the `start.bat` file in the TRACE folder from Windows Explorer.
-3. A command prompt will open, and the server will start at `http://0.0.0.0:8000`.
+Ensure Ollama is running first — on Windows that means the app is live in the
+system tray; WSL reaches it on `localhost:11434`. The server starts at
+`http://0.0.0.0:8000`.
 
-*Note: The script automatically checks if Ollama is accessible. If you see a warning about Ollama being unreachable, it usually means the background daemon is still starting up.*
+If you would rather not install Python and Ollama on the host at all, see
+[Running with Docker](../README.md#running-with-docker) — one command, no
+host dependencies beyond Docker itself.
 
 ## 6. Initial Data Ingestion
 
@@ -61,3 +88,25 @@ To start the server with minimal overhead, avoid packaging it with Docker or PyI
 3. Add researchers (faculty/students) using their Semantic Scholar IDs or names.
 4. Click **Sync Now** to pull their papers and build the semantic index.
 5. Once the sync says `done`, navigate back to the main student page at `http://localhost:8000/` and try your first search query!
+
+### Keeping the sync bounded
+
+`MAX_PAPERS_PER_PERSON` (default 200, newest first) caps how many papers are
+pulled per researcher. A handful of prolific authors can otherwise pull tens of
+thousands of records, and embedding them all is what will actually exhaust
+memory on a laptop. Embedding runs in batches of `EMBED_BATCH_SIZE` (default 64)
+so peak memory stays flat regardless of corpus size.
+
+Without a `SEMANTIC_SCHOLAR_API_KEY` the quota is 100 requests per 5 minutes, so
+a first sync of a dozen researchers takes several minutes — this is expected,
+and the client backs off and retries rather than failing.
+
+### Building an evaluation corpus quickly
+
+To populate a realistic corpus without adding people by hand:
+
+```bash
+cd backend
+python eval/seed_corpus.py --ingest     # registers well-known AI/ML researchers
+python eval/build_eval_set.py           # generates the labelled query set
+```

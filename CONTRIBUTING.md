@@ -99,36 +99,43 @@ One sentence, imperative mood, present tense. No period at the end.
 
 ## Running Tests
 
-### Unit tests (no Ollama or ChromaDB needed)
+The whole suite is self-contained — it mocks Ollama and ChromaDB, so it needs
+neither running:
 
 ```bash
-cd backend
-ADMIN_PASSWORD=test CORS_ORIGINS=* pytest tests/ --ignore=tests/test_api.py -v
+make unit
 ```
 
-### API tests (mocked, no Ollama needed)
-
-```bash
-cd backend
-ADMIN_PASSWORD=test CORS_ORIGINS=* pytest tests/test_api.py -v
-```
-
-### All tests with coverage
+With coverage, matching exactly what CI runs:
 
 ```bash
 cd backend
 ADMIN_PASSWORD=test CORS_ORIGINS=* pytest tests/ -v --cov=. --cov-report=term-missing
 ```
 
+There is one test job, not several. An earlier layout split `tests/` across two
+CI jobs — everything except `test_api.py`, then `test_api.py` alone — which
+installed identical dependencies twice for no benefit. Please keep new tests
+inside `tests/` so they stay in the one suite.
+
 ### Test files and what they cover
 
 | File | Covers |
 |------|--------|
 | `tests/test_config.py` | Config validation, env-var parsing, required fields |
-| `tests/test_hallucination_guard.py` | `_is_grounded()` logic, Jaccard threshold, substring match |
-| `tests/test_hybrid_search.py` | BM25 index, RRF fusion, score filtering |
+| `tests/test_metrics.py` | Ranking metrics; the title-vs-ID guard that stops metrics silently reading 0.0 |
+| `tests/test_hallucination_guard.py` | Paper and person grounding, containment floor, Jaccard threshold |
+| `tests/test_hybrid_search.py` | BM25 filtering, tokenization, author indexing, RRF fusion |
 | `tests/test_ingestor.py` | Atomic status writes, corrupt file recovery, year tracking |
 | `tests/test_api.py` | FastAPI routes, auth, pagination, response shapes |
+
+### Do not add scripts named `test_*` outside `tests/`
+
+`pytest.ini` sets `testpaths = tests`, so CI will not collect them — but anyone
+running bare `pytest` will, and a script that hits the real pipeline then runs
+as if it were a test. Two such files previously sat at `backend/` root; one
+hardcoded an absolute home directory. Put throwaway scripts elsewhere, or make
+them real tests.
 
 ---
 
@@ -175,19 +182,23 @@ Before opening a PR, check all of these:
 Integration tests and quality benchmarks require Ollama and a populated ChromaDB:
 
 ```bash
-# DeepEval regression suite
-make eval
-
-# RAGAS per-query scoring (requires ENABLE_RAGAS_SCORING=true in .env)
-make eval-ragas
-
-# MLflow UI (view experiment runs)
-mlflow ui --backend-store-uri backend/data/mlruns
+make seed          # build a real corpus (~1,100 papers, Semantic Scholar API)
+make eval-set      # build the labelled query set; committed labels re-applied
+make eval-fast     # retrieval metrics -> MLflow, no LLM judge
+make ablate        # stage-wise ablation: what each retrieval stage buys
+make test          # DeepEval regression suite
+make mlflow-ui     # compare runs
 ```
 
-See [docs/llmops-evaluation.md](docs/llmops-evaluation.md) for full setup instructions and how to interpret results.
+See [docs/llmops-evaluation.md](docs/llmops-evaluation.md) for how to interpret
+the numbers, and [docs/retrieval-experiments.md](docs/retrieval-experiments.md)
+for the measured results and the traps that produce confident but meaningless
+ones.
 
-These tests are **not run in CI** because they require a live Ollama instance. They are your responsibility to run locally before opening a PR that touches the pipeline.
+These are **not run in CI** because they need a live Ollama instance and a
+populated index. If your PR touches retrieval, run `make ablate` before and
+after your change and put both tables in the description. A retrieval change
+without a before/after is not reviewable.
 
 ---
 

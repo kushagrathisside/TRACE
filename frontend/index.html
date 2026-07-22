@@ -3,109 +3,179 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Find related research within your institute. Describe an idea; receive attributed papers, people to consult and next steps." />
   <title>TRACE — Research Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=2" />
+  <link rel="stylesheet" href="/static/style.css?v=3" />
 </head>
 <body>
 
 <header class="page-header">
-  <h1>📚 TRACE</h1>
-  <nav>
-    <a href="/">Student</a>
-    <a href="/admin">Admin</a>
+  <h1>
+    TRACE
+    <span class="subtitle">Trustworthy Retrieval with Automated Continuous Evaluation</span>
+  </h1>
+  <nav aria-label="Primary">
+    <a href="/" aria-current="page">Search</a>
+    <a href="/admin">Administration</a>
   </nav>
 </header>
 
-<div class="container">
+<main class="container">
 
-  <!-- Query form -->
-  <div class="card">
-    <h2>Describe Your Thesis / Project Idea</h2>
-    <p style="color:var(--muted);font-size:0.875rem;margin-bottom:1rem">
-      Share your research idea and get back related work from our institute — with the right people to connect with.
-      <br><span style="font-size:0.8rem">Tip: be specific. Mention methods, domains, or problem statements. Press <kbd>Ctrl+Enter</kbd> to submit.</span>
+  <!-- ── Query ────────────────────────────────────────────────────────── -->
+  <section class="card" id="query-form" aria-labelledby="query-heading">
+    <h2 id="query-heading">Describe your research idea</h2>
+
+    <p class="note prose" style="margin-bottom:1.25rem">
+      Results are drawn exclusively from publications authored by members of
+      this institute. Be specific — naming methods, domains or a problem
+      statement retrieves better than a broad topic.
     </p>
+
     <div class="field">
-      <label for="idea">Your idea</label>
-      <textarea id="idea" placeholder="e.g. I want to study transformer-based low-resource NLP for Indian regional languages, focusing on data augmentation techniques…"></textarea>
-    </div>
-    <button class="btn btn-primary" id="submitBtn" onclick="submitQuery()">
-      Find Related Research
-    </button>
-  </div>
-
-  <!-- Alert area -->
-  <div id="alert-area"></div>
-
-  <!-- Results -->
-  <div id="results-section" style="display:none">
-
-    <!-- Cache badge -->
-    <div id="cache-badge" style="margin-bottom:0.75rem;font-size:0.8rem;color:var(--muted)"></div>
-
-    <!-- No results -->
-    <div id="no-results-card" class="card" style="display:none">
-      <div style="color:var(--muted);font-size:0.95rem" id="no-results-msg"></div>
+      <label for="idea">Research idea</label>
+      <textarea id="idea" name="idea" maxlength="2000"
+        aria-describedby="idea-help"
+        placeholder="e.g. Transformer-based approaches to low-resource machine translation for Indian regional languages, with a focus on data augmentation."></textarea>
+      <p id="idea-help" class="note-sm" style="margin-top:0.45rem">
+        <span id="char-count">0</span> / 2000 characters ·
+        <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to submit
+      </p>
     </div>
 
-    <!-- Landscape summary -->
-    <div class="card" id="landscape-card" style="display:none">
-      <h2>Research Landscape</h2>
-      <p id="landscape-summary" style="line-height:1.75;font-size:0.95rem"></p>
+    <div class="row">
+      <button class="btn btn-primary" id="submitBtn" type="button" onclick="submitQuery()">
+        Search the institute
+      </button>
+      <span class="spacer"></span>
+      <span class="note-sm" id="timing-hint" hidden>Typically 10–30 seconds</span>
     </div>
+  </section>
 
-    <!-- Related papers -->
-    <div class="card" id="papers-card" style="display:none">
-      <h2>Related Papers from Our Institute</h2>
-      <ol id="papers-list" style="padding-left:1.25rem;line-height:1.9;font-size:0.9rem"></ol>
-    </div>
+  <div id="alert-area" role="alert" aria-live="assertive"></div>
 
-    <!-- People to consult -->
-    <div class="card" id="people-card" style="display:none">
-      <h2>People to Consult</h2>
-      <div id="people-list"></div>
-    </div>
+  <!-- ── Loading ──────────────────────────────────────────────────────── -->
+  <section class="card" id="loading-card" hidden aria-hidden="true">
+    <h2>Searching</h2>
+    <div class="skeleton-line" style="width:92%"></div>
+    <div class="skeleton-line" style="width:78%"></div>
+    <div class="skeleton-line" style="width:85%"></div>
+    <p class="note-sm" style="margin-top:1rem" id="loading-stage">Retrieving candidate papers…</p>
+  </section>
 
-    <!-- Next steps -->
-    <div class="card" id="steps-card" style="display:none">
-      <h2>Suggested Starting Points</h2>
-      <ol id="steps-list" style="padding-left:1.25rem;line-height:1.9;font-size:0.9rem"></ol>
-    </div>
+  <!-- ── Results ──────────────────────────────────────────────────────── -->
+  <div id="results-section" hidden aria-live="polite">
 
-    <!-- Retrieved source cards -->
-    <div class="card" id="sources-card" style="display:none">
-      <h2>Retrieved References <span style="font-size:0.75rem;font-weight:400;color:var(--muted)">(from vector DB)</span></h2>
-      <div class="sources-grid" id="sources-grid"></div>
-    </div>
+    <div class="provenance" id="provenance" hidden></div>
 
-    <!-- Feedback -->
-    <div id="feedback-section" style="display:none;margin-bottom:2rem">
-      <p style="font-size:0.875rem;color:var(--muted);margin-bottom:0.5rem">Was this helpful?</p>
-      <div style="display:flex;gap:0.5rem;align-items:center">
-        <button class="btn btn-secondary" id="upBtn"   onclick="sendFeedback('up')"   style="font-size:1.1rem;padding:0.4rem 1rem">👍</button>
-        <button class="btn btn-secondary" id="downBtn" onclick="sendFeedback('down')" style="font-size:1.1rem;padding:0.4rem 1rem">👎</button>
-        <span id="feedback-msg" style="font-size:0.85rem;color:var(--muted)"></span>
+    <section class="card" id="no-results-card" hidden>
+      <div class="empty">
+        <p class="empty-title">No closely related institute research found</p>
+        <p class="note prose" style="margin:0 auto" id="no-results-msg"></p>
       </div>
-    </div>
+    </section>
+
+    <section class="card" id="landscape-card" hidden aria-labelledby="landscape-heading">
+      <h2 id="landscape-heading">Research landscape</h2>
+      <p class="lede prose" id="landscape-summary"></p>
+    </section>
+
+    <section class="card" id="papers-card" hidden aria-labelledby="papers-heading">
+      <h2 id="papers-heading">Related work</h2>
+      <ol class="bibliography" id="papers-list"></ol>
+    </section>
+
+    <section class="card" id="people-card" hidden aria-labelledby="people-heading">
+      <h2 id="people-heading">People to consult</h2>
+      <div id="people-list"></div>
+      <p class="note-sm" style="margin-top:1rem">
+        Every name above appears as an author on at least one retrieved paper.
+      </p>
+    </section>
+
+    <section class="card" id="steps-card" hidden aria-labelledby="steps-heading">
+      <h2 id="steps-heading">Suggested next steps</h2>
+      <ol class="steps" id="steps-list"></ol>
+    </section>
+
+    <section class="card" id="sources-card" hidden aria-labelledby="sources-heading">
+      <h2 id="sources-heading">
+        Retrieved context
+        <span class="qualifier">— the documents the summary was written from</span>
+      </h2>
+      <div class="sources-grid" id="sources-grid"></div>
+    </section>
+
+    <section id="feedback-section" hidden style="margin-bottom:2rem">
+      <div class="row">
+        <span class="note">Was this useful?</span>
+        <button class="btn btn-quiet" id="upBtn" type="button"
+                onclick="sendFeedback('up')" aria-pressed="false">Yes</button>
+        <button class="btn btn-quiet" id="downBtn" type="button"
+                onclick="sendFeedback('down')" aria-pressed="false">No</button>
+        <span class="note-sm" id="feedback-msg" role="status"></span>
+      </div>
+    </section>
 
   </div>
-</div>
+</main>
 
 <script>
+'use strict';
+
 let _lastQuery = '';
+// Identifies the trace record for the answer on screen, so a rating can be
+// tied to what was actually retrieved rather than just to the query text.
+let _lastQueryId = '';
+
+const $ = (id) => document.getElementById(id);
+
+function show(id) { const el = $(id); if (el) el.hidden = false; }
+function hide(id) { const el = $(id); if (el) el.hidden = true; }
+
+function esc(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function showAlert(message, type = 'error') {
+  $('alert-area').innerHTML =
+    `<div class="alert alert-${esc(type)}">${esc(message)}</div>`;
+}
+
+// ── Query ─────────────────────────────────────────────────────────────────
 
 async function submitQuery(bypassCache = false) {
-  const idea = document.getElementById('idea').value.trim();
-  if (!idea) { showAlert('Please describe your idea first.', 'error'); return; }
+  const idea = $('idea').value.trim();
+  if (!idea) {
+    showAlert('Please describe your research idea first.');
+    $('idea').focus();
+    return;
+  }
 
   _lastQuery = idea;
-  const btn = document.getElementById('submitBtn');
+  const btn = $('submitBtn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Searching…';
-  document.getElementById('alert-area').innerHTML = '';
-  document.getElementById('results-section').style.display = 'none';
-  document.getElementById('feedback-section').style.display = 'none';
+  btn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Searching…';
+  $('alert-area').innerHTML = '';
+  hide('results-section');
+  show('loading-card');
+  $('timing-hint').hidden = false;
   resetFeedbackButtons();
+
+  // The pipeline has no progress channel, so these are honest descriptions of
+  // the stages rather than a fake percentage.
+  const stages = [
+    'Retrieving candidate papers…',
+    'Reranking by relevance…',
+    'Composing the summary…',
+  ];
+  let stageIndex = 0;
+  const stageTimer = setInterval(() => {
+    stageIndex = Math.min(stageIndex + 1, stages.length - 1);
+    $('loading-stage').textContent = stages[stageIndex];
+  }, 4000);
 
   try {
     const res = await fetch('/api/query', {
@@ -114,172 +184,223 @@ async function submitQuery(bypassCache = false) {
       body: JSON.stringify({ idea, bypass_cache: bypassCache }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Server error');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Request failed (${res.status})`);
     }
     const data = await res.json();
+    _lastQueryId = data.query_id || '';
     renderResults(data);
   } catch (e) {
-    showAlert(e.message, 'error');
+    showAlert(e.message);
   } finally {
+    clearInterval(stageTimer);
+    hide('loading-card');
+    $('timing-hint').hidden = true;
     btn.disabled = false;
-    btn.innerHTML = 'Find Related Research';
+    btn.textContent = 'Search the institute';
   }
 }
 
-function renderResults({ answer, sources, cached }) {
-  document.getElementById('results-section').style.display = 'block';
+// ── Rendering ─────────────────────────────────────────────────────────────
 
-  // Cache indicator
-  const badge = document.getElementById('cache-badge');
-  if (cached) {
-    badge.innerHTML = '⚡ Served from semantic cache (identical query answered before) — <a href="#" onclick="submitQuery(true); return false;" style="color:var(--primary);text-decoration:underline;cursor:pointer">Refresh Cache</a>';
-  } else {
-    badge.innerHTML = '';
+function renderProvenance({ cached, query_id, sourceCount }) {
+  const el = $('provenance');
+  const parts = [];
+
+  parts.push(cached
+    ? `Served from cache <a href="#" onclick="submitQuery(true);return false;">re-run search</a>`
+    : `Retrieved ${sourceCount} document${sourceCount === 1 ? '' : 's'}`);
+
+  if (query_id) {
+    parts.push(`<span class="trace-id" title="Reference for this result">${esc(query_id.slice(0, 8))}</span>`);
   }
 
-  // If no results
+  el.innerHTML = parts.join(' <span class="dot">·</span> ');
+  el.hidden = false;
+}
+
+function renderReferences(papers) {
+  const list = $('papers-list');
+  list.innerHTML = '';
+  if (!papers?.length) { hide('papers-card'); return; }
+
+  for (const p of papers) {
+    // Citation order: authors, year, title, venue — the shape a reader scans.
+    const meta = [];
+    if (p.authors) meta.push(esc(p.authors));
+    if (p.year) meta.push(esc(p.year));
+    if (p.venue) meta.push(`<span class="venue">${esc(p.venue)}</span>`);
+
+    const li = document.createElement('li');
+    li.innerHTML =
+      `<cite class="ref-title">${esc(p.title)}</cite>` +
+      (meta.length ? `<div class="ref-meta">${meta.join(' · ')}</div>` : '') +
+      (p.relevance ? `<p class="ref-relevance">${esc(p.relevance)}</p>` : '');
+    list.appendChild(li);
+  }
+  show('papers-card');
+}
+
+function renderPeople(people) {
+  const list = $('people-list');
+  list.innerHTML = '';
+  if (!people?.length) { hide('people-card'); return; }
+
+  for (const p of people) {
+    const role = (p.role || '').toLowerCase();
+    const badgeCls = role.includes('faculty') ? 'badge-faculty' : 'badge-student';
+    const meta = [];
+    if (p.role) meta.push(`<span class="badge ${badgeCls}">${esc(p.role)}</span>`);
+    if (p.department) meta.push(esc(p.department));
+
+    list.insertAdjacentHTML('beforeend', `
+      <div class="person">
+        <div class="person-name">${esc(p.name)}</div>
+        ${meta.length ? `<div class="person-meta">${meta.join(' · ')}</div>` : ''}
+        ${p.relevant_work ? `<p class="person-work">${esc(p.relevant_work)}</p>` : ''}
+      </div>`);
+  }
+  show('people-card');
+}
+
+function renderSteps(steps) {
+  const list = $('steps-list');
+  list.innerHTML = '';
+  if (!steps?.length) { hide('steps-card'); return; }
+  for (const s of steps) {
+    const li = document.createElement('li');
+    li.textContent = s;
+    list.appendChild(li);
+  }
+  show('steps-card');
+}
+
+function renderSources(sources) {
+  const grid = $('sources-grid');
+  grid.innerHTML = '';
+  const unique = dedup(sources, 'paper_id');
+  if (!unique.length) { hide('sources-card'); return; }
+
+  for (const s of unique) {
+    const role = s.institute_roles || '';
+    const badgeCls = role.includes('faculty') && role.includes('student') ? 'badge-mixed'
+                   : role.includes('faculty') ? 'badge-faculty' : 'badge-student';
+    const line = [s.year, s.venue].filter(Boolean).map(esc).join(' · ');
+
+    grid.insertAdjacentHTML('beforeend', `
+      <article class="source-card">
+        <div class="paper-title">${esc(s.title)}</div>
+        ${line ? `<div class="meta">${line}</div>` : ''}
+        ${s.authors ? `<div class="meta">${esc(s.authors)}</div>` : ''}
+        ${s.institute_authors ? `<div class="meta" style="margin-top:0.45rem">
+            ${esc(s.institute_authors)}
+            ${role ? `<span class="badge ${badgeCls}">${esc(role)}</span>` : ''}
+          </div>` : ''}
+        <div class="row" style="margin-top:0.6rem">
+          ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"
+                        style="font-size:0.8rem">View paper</a>` : ''}
+          <span class="spacer"></span>
+          ${s.rerank_score !== null && s.rerank_score !== undefined
+            ? `<span class="score" title="Cross-encoder relevance score">${esc(s.rerank_score)}</span>` : ''}
+        </div>
+      </article>`);
+  }
+  show('sources-card');
+}
+
+function renderResults({ answer, sources, cached, query_id }) {
+  show('results-section');
+  renderProvenance({ cached, query_id, sourceCount: (sources || []).length });
+
+  if (answer.generation_failed) {
+    showAlert(
+      'The summary could not be generated for this query. The retrieved papers below are still valid.',
+      'info'
+    );
+  }
+
   if (answer.no_relevant_research) {
     show('no-results-card');
-    document.getElementById('no-results-msg').textContent = answer.landscape_summary;
-    hide('landscape-card'); hide('papers-card'); hide('people-card');
-    hide('steps-card'); hide('sources-card');
+    $('no-results-msg').textContent = answer.landscape_summary || '';
+    ['landscape-card', 'papers-card', 'people-card', 'steps-card', 'sources-card'].forEach(hide);
+    show('feedback-section');
+    $('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
   hide('no-results-card');
 
-  // Landscape summary
   if (answer.landscape_summary) {
+    $('landscape-summary').textContent = answer.landscape_summary;
     show('landscape-card');
-    document.getElementById('landscape-summary').textContent = answer.landscape_summary;
+  } else {
+    hide('landscape-card');
   }
 
-  // Related papers
-  const papersList = document.getElementById('papers-list');
-  papersList.innerHTML = '';
-  if (answer.related_papers?.length) {
-    show('papers-card');
-    for (const p of answer.related_papers) {
-      const li = document.createElement('li');
-      li.style.marginBottom = '0.5rem';
-      li.innerHTML =
-        `<strong>${esc(p.title)}</strong>` +
-        (p.year ? ` <span style="color:var(--muted)">(${p.year})</span>` : '') +
-        (p.authors ? ` — <span style="color:var(--muted)">${esc(p.authors)}</span>` : '') +
-        (p.venue ? ` — <em>${esc(p.venue)}</em>` : '') +
-        (p.relevance ? `<br><span style="font-size:0.85rem;color:var(--text)">↳ ${esc(p.relevance)}</span>` : '');
-      papersList.appendChild(li);
-    }
-  } else { hide('papers-card'); }
+  renderReferences(answer.related_papers);
+  renderPeople(answer.people_to_consult);
+  renderSteps(answer.next_steps);
+  renderSources(sources);
 
-  // People to consult
-  const peopleList = document.getElementById('people-list');
-  peopleList.innerHTML = '';
-  if (answer.people_to_consult?.length) {
-    show('people-card');
-    for (const p of answer.people_to_consult) {
-      const role = (p.role || '').toLowerCase();
-      const badgeCls = role === 'faculty' ? 'badge-faculty' : 'badge-student';
-      peopleList.insertAdjacentHTML('beforeend', `
-        <div style="display:flex;gap:0.75rem;align-items:flex-start;padding:0.6rem 0;border-bottom:1px solid var(--border)">
-          <div style="flex:1">
-            <strong>${esc(p.name)}</strong>
-            <span class="badge ${badgeCls}" style="margin-left:0.4rem">${esc(p.role || 'unknown')}</span>
-            ${p.department ? `<span style="color:var(--muted);font-size:0.82rem"> · ${esc(p.department)}</span>` : ''}
-            ${p.relevant_work ? `<div style="font-size:0.875rem;color:var(--text);margin-top:0.2rem">${esc(p.relevant_work)}</div>` : ''}
-          </div>
-        </div>`);
-    }
-  } else { hide('people-card'); }
-
-  // Next steps
-  const stepsList = document.getElementById('steps-list');
-  stepsList.innerHTML = '';
-  if (answer.next_steps?.length) {
-    show('steps-card');
-    for (const s of answer.next_steps) {
-      const li = document.createElement('li');
-      li.textContent = s;
-      stepsList.appendChild(li);
-    }
-  } else { hide('steps-card'); }
-
-  // Source cards (raw retrieval context)
-  const grid = document.getElementById('sources-grid');
-  grid.innerHTML = '';
-  const unique = dedup(sources, 'title');
-  if (unique.length) {
-    show('sources-card');
-    for (const s of unique) {
-      const role = s.institute_roles || '';
-      const badgeCls = role.includes('faculty') && role.includes('student') ? 'badge-mixed'
-                     : role.includes('faculty') ? 'badge-faculty' : 'badge-student';
-      grid.insertAdjacentHTML('beforeend', `
-        <div class="source-card">
-          <div class="paper-title">${esc(s.title)}</div>
-          <div class="meta">${s.year ? s.year + ' · ' : ''}${esc(s.venue)}</div>
-          <div class="meta">${esc(s.authors)}</div>
-          ${s.institute_authors ? `<div style="margin-top:0.4rem;font-size:0.82rem">
-            <strong>Institute Authors:</strong> ${esc(s.institute_authors)}
-            <span class="badge ${badgeCls}" style="margin-left:0.3rem">${esc(role || 'unknown')}</span>
-          </div>` : ''}
-          ${s.url ? `<div style="margin-top:0.5rem"><a href="${esc(s.url)}" target="_blank" style="font-size:0.8rem">View paper →</a></div>` : ''}
-        </div>`);
-    }
-  } else { hide('sources-card'); }
-
-  document.getElementById('feedback-section').style.display = 'block';
+  show('feedback-section');
+  $('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// ── Feedback ──────────────────────────────────────────────────────────────
+
 async function sendFeedback(rating) {
-  document.getElementById('upBtn').disabled = true;
-  document.getElementById('downBtn').disabled = true;
+  const up = $('upBtn'), down = $('downBtn');
+  up.disabled = true;
+  down.disabled = true;
+  (rating === 'up' ? up : down).setAttribute('aria-pressed', 'true');
+
   try {
     await fetch('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: _lastQuery, rating }),
+      body: JSON.stringify({ query: _lastQuery, rating, query_id: _lastQueryId }),
     });
-    document.getElementById('feedback-msg').textContent =
-      rating === 'up' ? 'Thanks for the positive feedback!' : 'Thanks — we\'ll use this to improve.';
-  } catch(_) {
-    document.getElementById('feedback-msg').textContent = 'Could not send feedback.';
+    $('feedback-msg').textContent = 'Thank you — recorded.';
+  } catch (_) {
+    $('feedback-msg').textContent = 'Could not send feedback.';
+    up.disabled = false;
+    down.disabled = false;
   }
 }
 
 function resetFeedbackButtons() {
-  document.getElementById('upBtn').disabled   = false;
-  document.getElementById('downBtn').disabled = false;
-  document.getElementById('feedback-msg').textContent = '';
+  for (const id of ['upBtn', 'downBtn']) {
+    const el = $(id);
+    el.disabled = false;
+    el.setAttribute('aria-pressed', 'false');
+  }
+  $('feedback-msg').textContent = '';
 }
 
-// ── Utilities ─────────────────────────────────────────────────────────────────
-function show(id) { document.getElementById(id).style.display = 'block'; }
-function hide(id) { document.getElementById(id).style.display = 'none';  }
+// ── Utilities ─────────────────────────────────────────────────────────────
 
 function dedup(arr, key) {
   const seen = new Set();
-  return arr.filter(x => {
-    if (seen.has(x[key])) return false;
-    seen.add(x[key]); return true;
+  return (arr || []).filter((item) => {
+    const k = item?.[key];
+    if (!k || seen.has(k)) return !k;
+    seen.add(k);
+    return true;
   });
 }
 
-function showAlert(msg, type) {
-  document.getElementById('alert-area').innerHTML =
-    `<div class="alert alert-${type}">${esc(msg)}</div>`;
-}
+// ── Wiring ────────────────────────────────────────────────────────────────
 
-function esc(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// Ctrl/Cmd+Enter submits
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('idea').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitQuery();
-  });
+const ideaInput = $('idea');
+ideaInput.addEventListener('input', () => {
+  $('char-count').textContent = ideaInput.value.length;
+});
+ideaInput.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    submitQuery();
+  }
 });
 </script>
+
 </body>
 </html>

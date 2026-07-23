@@ -67,32 +67,43 @@ Student types idea
           → "transformers, low-resource NLP, data augmentation,
               cross-lingual transfer, multilingual BERT, …"
       ▼
-      (3) HNSW vector search  [k=20 candidates]
-          all-MiniLM-L6-v2 bi-encoder, cosine distance
+      (3) HNSW vector search  [k=20 candidates]      (RETRIEVAL_MODE: dense|hybrid)
+          Ollama all-minilm bi-encoder, cosine distance
           ChromaDB: M=48, ef_construction=200, search_ef=150
       ▼
       (4) Similarity threshold guard
           Drop candidates with distance > MIN_SIMILARITY_DISTANCE (0.85)
-          → caches NO_RESULTS and returns early if nothing close enough
       ▼
-      (5) BM25 keyword search  [k=20 candidates]  +  RRF fusion
-          rank_bm25 on title+abstract corpus
-          Reciprocal Rank Fusion combines both ranked lists
+      (5) BM25 keyword search  [k=20]  +  weighted RRF   (RETRIEVAL_MODE: bm25|hybrid)
+          rank_bm25 over title + abstract + AUTHOR NAMES
+          Candidates must score strictly above BM25_MIN_SCORE
+      ▼
+      (5b) Similarity guard re-applied to BM25-only candidates
+          Those never faced step (4); without this the guard is bypassed
+          by the sparse arm.  One extra Chroma lookup for their distances.
+          → caches NO_RESULTS and returns early if nothing survives
       ▼
       (6) Cross-encoder reranking  [20 → top 5]
           cross-encoder/ms-marco-MiniLM-L-6-v2
           Reads query+doc jointly → accurate relevance scores
+          Optional MIN_RERANK_SCORE floor; inactive reranker is reported
+          in /health and tagged reranker_active=false in every trace
       ▼
       (7) LLM structured generation
           ChatOllama format="json", temperature=0
           System prompt with JSON schema example
           Pydantic ResearchLandscape model
-          Hallucination guard: drops fabricated citations (substring + Jaccard ≥ 0.75)
+          Hallucination guard: drops fabricated papers AND people,
+          returns grounding counts for metrics
       ▼
       (7b) Optional: RAGAS evaluation (if ENABLE_RAGAS_SCORING=true)
            Faithfulness + Answer Relevancy scores logged to feedback.jsonl
       ▼
-      (8) Write to semantic cache  →  return to student
+      (8) Write to semantic cache  →  return {answer, sources, query_id}
+      ▼
+      (9) Write trace record to data/retrieval_traces.jsonl
+          Candidate IDs and scores per stage, per-stage latency,
+          grounding counts, config snapshot
 ```
 
 ---
@@ -108,26 +119,39 @@ Free official API from the Allen Institute for AI. No scraping, no proxies, good
 ### ChromaDB with HNSW Tuning
 Local persistent vector database. Default HNSW settings (M=16, ef=10) sacrifice recall for speed at small scale. We raise M=48 and search_ef=150 to recover ~5% more true nearest neighbours with <2ms overhead per query. Settings are frozen at collection creation — delete `data/chroma_db/` and re-sync to apply changes. A startup guard (`chroma_meta.json`) detects if the embedding model has been swapped without clearing the DB, raising a clear error rather than silently returning wrong results.
 
-### HuggingFace `all-MiniLM-L6-v2` Embeddings
-22M params, 384 dimensions, runs on CPU, ~5ms per query embed. `normalize_embeddings=True` ensures unit-norm vectors — required for ChromaDB's cosine distance formula (`1 - cosine_similarity`) to be exact. Trade-off vs. OpenAI embeddings: slightly lower recall on subtle semantic connections.
+### Ollama `all-minilm` Embeddings
+22M params, 384 dimensions, runs on CPU, ~5 ms per query embed. Served through Ollama rather than `sentence-transformers` so the app has one model runtime and no HuggingFace download at startup. `EMBEDDING_MODEL_NAME` must therefore be an **Ollama tag** (`all-minilm`), not a HuggingFace repo path — the reranker is the exception, since it still loads via `sentence-transformers`. ChromaDB's cosine space normalises internally, so vector norm is not relied upon here. Trade-off vs. hosted embeddings: slightly lower recall on subtle semantic connections.
 
 ### Semantic Query Cache
-A second ChromaDB collection (`query_cache`) stores query embeddings → answers. On a new query we embed it and check if any cached query has cosine distance < 0.08 (meaning >92% similar). Cache hits skip the entire 7-stage pipeline, returning in ~7ms vs. 30s. Cache is invalidated after every sync. "No results" responses are also cached — repeated out-of-domain queries skip the full pipeline instead of re-running it. This is the highest-ROI latency optimisation at low engineering cost.
+A second ChromaDB collection (`query_cache`) stores query embeddings → answers. On a new query we embed it and check if any cached query has cosine distance < 0.08 (meaning >92% similar). Cache hits skip the entire retrieval and generation path, returning in ~7 ms vs. 10-30 s. Cache is invalidated after every sync. "No results" responses are also cached — repeated out-of-domain queries skip the full pipeline instead of re-running it. This is the highest-ROI latency optimisation at low engineering cost.
 
-### BM25 + Reciprocal Rank Fusion (Hybrid Search)
-Dense retrieval misses exact named-entity matches ("Prof. Sharma", "AlexNet"). BM25 scores documents by term frequency. RRF combines the two ranked lists: `score(d) = Σ 1/(k + rank_i(d))` with k=60. Documents appearing in both lists are strongly boosted. BM25 index is built in-memory (~25 MB) from all ChromaDB documents on startup and after each sync.
+### BM25 + Weighted Reciprocal Rank Fusion (Hybrid Search)
+Dense retrieval misses exact named-entity matches ("Kushagra Srivastava", "AlexNet"). BM25 scores documents by term frequency. RRF combines the two ranked lists: `score(d) = Σ w_i/(k + rank_i(d))` with k=60 and per-retriever weights (`RRF_WEIGHT_DENSE`, `RRF_WEIGHT_SPARSE`). Documents appearing in both lists are strongly boosted. The index is built in-memory (~25 MB) from all ChromaDB documents on startup and after each sync.
+
+Three details that matter more than the fusion formula:
+
+- **Author names are indexed.** They live only in Chroma metadata, so until they were added to the BM25 corpus the named-entity case above could not work at all — the surname appeared in no indexed text, dense or sparse. Adding them needs no re-embedding, since this index is rebuilt from Chroma.
+- **Tokenization strips punctuation and stopwords.** Plain `.split()` left `"Srivastava's"` and `"GNNs,"` as distinct tokens, silently breaking the exact-match lookups BM25 exists to serve.
+- **Zero-score candidates are dropped.** A query sharing no token with the corpus scores 0.0 against *every* document, and `rank_bm25` still returns a full top-k. Feeding those to RRF gives pure noise the same rank weight as genuine hits: a noise document at BM25 rank 0 scores 1/61 = 0.0164 and outranks a real dense hit at rank 5 (1/66 = 0.0152).
 
 ### Cross-Encoder Reranking
-Bi-encoder retrieval is fast but approximate — it encodes query and document independently. A cross-encoder reads them together and captures fine-grained token interactions. We retrieve 20 candidates cheaply, then rerank with `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, ~80ms for 20 pairs on CPU), keeping the top 5.
+Bi-encoder retrieval is fast but approximate — it encodes query and document independently. A cross-encoder reads them together and captures fine-grained token interactions. We retrieve 20 candidates cheaply, then rerank with `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, ~80 ms for 20 pairs on CPU), keeping the top 5.
+
+If the model cannot be loaded the pipeline falls back to a passthrough that preserves fusion order. That fallback is a material ranking regression, so it is **never silent**: it logs at ERROR, `/health` reports `reranker: degraded`, every trace record carries `reranker_active=false`, and `run_eval.py` prints a banner and records it as an MLflow param. Set `RERANKER_REQUIRED=true` to refuse to start instead.
+
+Note the metric consequence, since it is easy to get wrong: the cross-encoder reorders the same 20 candidates it was given, so it **cannot** change Recall@20. Its contribution appears only at the truncation depth — Recall@5, nDCG@5, MRR@5. An ablation table reporting only Recall@fetch_k will always show the reranker doing nothing.
 
 ### Structured JSON Output + Hallucination Guard
 `ChatOllama(format="json")` forces the model to emit valid JSON. A concrete schema example in the system prompt constrains the output shape. Pydantic validates and coerces the result. The exception handler now distinguishes `json.JSONDecodeError`, `pydantic.ValidationError`, and unexpected runtime errors separately, so failures are logged at the correct severity level.
 
 The post-parse hallucination guard cross-checks every cited paper against the retrieved source documents. It uses a strict ID-based approach first:
-1. **Exact `paper_id` Match**: The model is prompted to output the Semantic Scholar `paper_id` alongside the title. If the ID matches a retrieved source, it is 100% grounded.
-2. **Fuzzy Fallback**: If the ID is malformed, it falls back to a title substring match or Jaccard word overlap (≥ 0.75).
+1. **Exact `paper_id` Match**: The model is prompted to output the Semantic Scholar `paper_id` alongside the title. If the ID matches a retrieved source, it is grounded.
+2. **Containment, with a length floor**: a cited title contained in a source title counts — but only if it is at least 12 characters and 3 words. Without the floor a fabricated title of `"Learning"` matches nearly every paper in the corpus.
+3. **Jaccard word overlap** above `TITLE_JACCARD_THRESHOLD` (0.75).
 
-Fabricated references are silently dropped. This handles the main failure mode of small models (llama3.2 3B) in RAG: citing plausible but non-existent papers.
+**People are checked too.** Every name in `people_to_consult` must appear as an author on a retrieved paper, matched on full name — a bare surname is rejected, since it identifies no one in particular. Sending a student to a professor who does not exist, or attributing work to the wrong person, is the most damaging output this system can produce and the one a student is least able to verify.
+
+The guard returns counts (`papers_cited`, `papers_dropped`, `people_cited`, `people_dropped`) which land in each trace, making grounding rate a tracked metric rather than a log line to grep. Generation failures degrade to retrieval-only output with a fixed message — raw model output and exception strings are logged, never shown to students.
 
 ### KV Cache (Ollama)
 `keep_alive=-1` keeps the model resident in memory indefinitely. The critical benefit: Ollama caches the KV state for the system prompt prefix. Since the same prompt prefix is sent on every query, the ~800 system-prompt tokens are only encoded once and reused from KV cache on subsequent calls. `keep_alive=0` (default) would evict the model after 5 minutes, forcing a cold-start KV re-encode. The cost: persistent RAM/VRAM usage (~2GB for llama3.2 3B).
@@ -160,10 +184,19 @@ The `X-Admin-Password` header is compared using `hmac.compare_digest()` rather t
 |---|---|---|---|
 | `ADMIN_PASSWORD` | — | **Yes** | Shared admin secret; no default, must be set |
 | `CORS_ORIGINS` | — | **Yes** | Comma-separated list of allowed origins; `*` for dev |
-| `INSTITUTE_NAME` | `"Our Institute"` | No | Appears in LLM prompt and page headers |
+| `INSTITUTE_NAME` | `"TRACE-Institute"` | No | Appears in LLM prompt and page headers |
 | `LLM_MODEL_NAME` | `"llama3.2"` | No | Ollama model for generation |
-| `EMBEDDING_MODEL_NAME` | `"all-MiniLM-L6-v2"` | No | HuggingFace bi-encoder |
-| `RERANKER_MODEL_NAME` | `"cross-encoder/ms-marco-MiniLM-L-6-v2"` | No | Cross-encoder for reranking |
+| `EMBEDDING_MODEL_NAME` | `"all-minilm"` | No | **Ollama** tag, not a HuggingFace path |
+| `RERANKER_MODEL_NAME` | `"cross-encoder/ms-marco-MiniLM-L-6-v2"` | No | sentence-transformers path; empty = no reranking |
+| `RERANKER_REQUIRED` | `"false"` | No | `"true"` = refuse to start if the reranker will not load |
+| `RETRIEVAL_MODE` | `"hybrid"` | No | `dense` \| `bm25` \| `hybrid` (ablation axis) |
+| `ENABLE_QUERY_EXPANSION` | `"true"` | No | LLM keyword expansion before dense search |
+| `BM25_MIN_SCORE` | `0.0` | No | BM25 candidates must score strictly above this |
+| `RRF_K` / `RRF_WEIGHT_DENSE` / `RRF_WEIGHT_SPARSE` | `60` / `1.0` / `1.0` | No | Weighted RRF |
+| `ENFORCE_GUARD_POST_FUSION` | `"true"` | No | Re-apply distance guard to BM25-only candidates |
+| `MIN_RERANK_SCORE` | *(unset)* | No | Cross-encoder relevance floor |
+| `MAX_PAPERS_PER_PERSON` | `200` | No | Fetch cap per person (bounds index size) |
+| `EMBED_BATCH_SIZE` | `64` | No | Documents per embedding request during sync |
 | `OLLAMA_BASE_URL` | `"http://localhost:11434"` | No | Ollama API base URL |
 | `OLLAMA_KEEP_ALIVE` | `-1` | No | KV cache persistence; -1 = never evict |
 | `OLLAMA_NUM_CTX` | `8192` | No | Context window (tokens) |
@@ -335,13 +368,13 @@ Measures whether the right papers surface for a query, independent of the LLM.
 You need labelled `(query, relevant_paper_ids)` pairs. Three practical sources:
 
 **1. Known supervisor–student pairs** (zero labelling effort)
-If Prof. Sharma supervised a thesis on GNNs, her papers *must* appear when that thesis topic is queried. Every historical thesis title + advisor pairing is automatically correct ground truth.
+If Kushagra Srivastava supervised a thesis on GNNs, her papers *must* appear when that thesis topic is queried. Every historical thesis title + advisor pairing is automatically correct ground truth.
 
 ```python
 # Example ground truth entry
 {
   "query": "Graph neural networks for social network analysis",
-  "relevant_paper_ids": ["abc123", "def456"],  # Prof. Sharma's GNN papers
+  "relevant_paper_ids": ["abc123", "def456"],  # Kushagra Srivastava's GNN papers
   "source": "supervisor_pair"
 }
 ```

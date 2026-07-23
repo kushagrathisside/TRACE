@@ -131,9 +131,39 @@ class VectorStoreManager:
         """
         Upsert by paper_id.  Existing documents are overwritten (not duplicated),
         making sync idempotent.
+
+        Embedding happens in bounded batches rather than one call for the whole
+        sync.  LangChain's Chroma wrapper hands every document to a single
+        embed request, which for a large sync means a multi-megabyte payload:
+        Ollama rejects it with "input length exceeds the context length" and the
+        entire sync is lost.  Batching also keeps peak memory flat regardless of
+        how many papers a sync pulls.
+
+        A batch that still fails is retried document-by-document so one
+        pathological abstract costs one paper, not the whole run.
         """
-        self._store.add_documents(documents=docs, ids=ids)
-        return len(docs)
+        indexed = 0
+        for start in range(0, len(docs), config.EMBED_BATCH_SIZE):
+            batch = docs[start : start + config.EMBED_BATCH_SIZE]
+            batch_ids = ids[start : start + config.EMBED_BATCH_SIZE]
+            try:
+                self._store.add_documents(documents=batch, ids=batch_ids)
+                indexed += len(batch)
+            except Exception as exc:
+                logger.warning(
+                    f"Batch embed failed ({exc}); retrying {len(batch)} documents "
+                    "individually"
+                )
+                for doc, doc_id in zip(batch, batch_ids):
+                    try:
+                        self._store.add_documents(documents=[doc], ids=[doc_id])
+                        indexed += 1
+                    except Exception as doc_exc:
+                        logger.error(
+                            f"Skipping paper {doc_id} "
+                            f"({len(doc.page_content)} chars): {doc_exc}"
+                        )
+        return indexed
 
     # ── Read ─────────────────────────────────────────────────────────────────
 
@@ -149,15 +179,58 @@ class VectorStoreManager:
         """
         return self._store.similarity_search_with_score(query, k=k)
 
+    def distances_for_ids(
+        self,
+        query_embedding: list[float],
+        paper_ids: list[str],
+    ) -> dict[str, float]:
+        """
+        Exact cosine distance between the query and a specific set of documents.
+
+        Used to apply the similarity guard to BM25-only candidates.  Those
+        documents were never in the dense top-k, so their distance is unknown —
+        and without it the guard is trivially bypassed by the sparse arm, which
+        is how irrelevant papers reached the LLM context.
+
+        One extra Chroma query with an ID filter; negligible next to the
+        cross-encoder, let alone generation.
+        """
+        ids = [pid for pid in paper_ids if pid]
+        if not ids:
+            return {}
+        try:
+            res = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=len(ids),
+                where={"paper_id": {"$in": ids}},
+                include=["distances", "metadatas"],
+            )
+        except Exception as exc:
+            # Fail open: a guard that errors must not take retrieval down with it.
+            logger.warning(f"distances_for_ids failed (non-fatal): {exc}")
+            return {}
+
+        metas = (res.get("metadatas") or [[]])[0]
+        dists = (res.get("distances") or [[]])[0]
+        return {
+            m.get("paper_id", ""): float(d)
+            for m, d in zip(metas, dists)
+            if m.get("paper_id")
+        }
+
     def get_all_documents(self) -> list[Document]:
         """Load every stored document for BM25 index construction."""
         result = self._collection.get(include=["documents", "metadatas"])
         docs = result.get("documents", [])
         metas = result.get("metadatas", [])
-        assert len(docs) == len(metas), (
-            f"ChromaDB corruption detected: {len(docs)} documents but {len(metas)} metadata entries. "
-            "Run a fresh sync after deleting backend/data/chroma_db/"
-        )
+        if len(docs) != len(metas):
+            # Not an assert: `python -O` strips those, and this check exists
+            # precisely to stop a corrupt index from being served silently.
+            raise RuntimeError(
+                f"ChromaDB corruption detected: {len(docs)} documents but "
+                f"{len(metas)} metadata entries. "
+                "Run a fresh sync after deleting backend/data/chroma_db/"
+            )
         return [
             Document(page_content=content, metadata=meta)
             for content, meta in zip(docs, metas)

@@ -2,7 +2,9 @@
 
 This document tracks all remaining feature upgrades, enhancements, and open engineering tasks. Items are grouped by area and ordered by impact within each group.
 
-Last reviewed: 2026-06-09
+Last reviewed: 2026-07-20
+
+> Items resolved since the last review are listed in *§0 Recently Completed*.
 
 ---
 
@@ -13,6 +15,43 @@ Last reviewed: 2026-06-09
 | 🔴 HIGH | Significant impact on reliability, security, or quality |
 | 🟡 MEDIUM | Clear improvement, reasonable effort |
 | 🟢 LOW | Nice-to-have, low urgency |
+
+---
+
+## 0. Recently Completed (2026-07-20)
+
+Retrieval and measurement work that has landed:
+
+| Area | Change |
+|---|---|
+| Retrieval | BM25 zero-score candidates no longer enter RRF (they outranked genuine dense hits) |
+| Retrieval | Author names, venue and departments added to the BM25 corpus — named-entity queries previously could not match anything |
+| Retrieval | Tokenizer strips punctuation and stopwords instead of bare `.split()` |
+| Retrieval | Weighted RRF (`RRF_WEIGHT_DENSE` / `RRF_WEIGHT_SPARSE`) |
+| Retrieval | Similarity guard re-applied to BM25-only candidates, which previously bypassed it entirely |
+| Retrieval | Optional `MIN_RERANK_SCORE` floor |
+| Reranker | Load failure is loud: `/health`, trace tag, MLflow param, optional hard-fail |
+| Grounding | `people_to_consult` is now validated against retrieved authors; containment matching has a length floor |
+| Grounding | Generation failures degrade to retrieval-only output instead of showing raw model text or exception strings to students |
+| Measurement | `query_id` + per-stage timings + full trace record per query |
+| Measurement | `paper_id` in API sources — retrieval metrics had no join key |
+| Measurement | Ranking metrics rewritten; title-vs-ID mismatch now raises instead of silently scoring 0.0 |
+| Measurement | Eval bypasses the semantic cache; missing metrics are `None`, not `0.0` |
+| Measurement | Slice breakdown with bootstrap CIs; `eval/ablate.py` for stage attribution and sweeps |
+| Ingestion | Semantic Scholar pagination (prolific authors were truncated at 1000) |
+| Ingestion | Co-author metadata merged rather than overwritten on incremental syncs |
+| Ingestion | Bounded fetch (`MAX_PAPERS_PER_PERSON`) and batched embedding (`EMBED_BATCH_SIZE`) |
+| Platform | Proxy variables no longer deleted globally at import — that broke all outbound HTTPS |
+| Platform | Async Ollama probes; blocking `httpx.get` no longer parks the event loop |
+| Platform | `/api/feedback` rate-limited and accepts `query_id` |
+
+### Still open from the same review
+
+- **Semantic cache eviction** — the collection grows without bound; entries carry `created_at`, so TTL eviction is straightforward.
+- **Cache false-hit rate** — needs a hard-negative set (negations, entity swaps, scope changes) before `CACHE_HIT_DISTANCE` can be tuned honestly.
+- **`institute_roles` / `departments` drift** — not rebuilt when a person is removed from a co-authored paper.
+- **Judge calibration** — RAGAS/DeepEval scores are ungated until agreement with hand labels is measured.
+- **Trace log rotation** — grows ~2-4 KB per query, unbounded.
 
 ---
 
@@ -169,7 +208,7 @@ Return JSON: {"relevance": N, "attribution": N, "actionability": N}
 **Implementation:**
 - `eval/run_eval.py` already exists with the full MLflow integration
 - Missing step: run it as part of a pre-deployment checklist
-- Add `make eval` target or `scripts/run_eval.sh` that executes: `python eval/run_eval.py --run-name "$(git rev-parse --short HEAD)"`
+- Add `make test` target or `scripts/run_eval.sh` that executes: `python eval/run_eval.py --run-name "$(git rev-parse --short HEAD)"`
 - View results: `mlflow ui --backend-store-uri data/mlruns`
 
 **Effort:** 1 hour (integration) + eval set creation (1 day with faculty)

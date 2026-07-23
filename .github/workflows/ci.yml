@@ -10,27 +10,25 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHON_VERSION: "3.11"
+
 jobs:
-  # ── Lint ────────────────────────────────────────────────────────────────────
+  # ── Lint ────────────────────────────────────────────────────────────────
+  # Cheap gate. Runs first so a formatting slip fails in ~20s rather than
+  # after a full dependency install.
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: lint-${{ hashFiles('requirements.txt') }}
-
-      - name: Install lint dependencies
-        run: pip install ruff
+      - run: pip install ruff
 
       - name: Ruff lint
         run: ruff check backend/ --select=E,F,W,I --ignore=E501
@@ -38,9 +36,17 @@ jobs:
       - name: Ruff format check
         run: ruff format backend/ --check
 
-  # ── Unit Tests ──────────────────────────────────────────────────────────────
-  unit-tests:
-    name: Unit Tests
+  # ── Tests ───────────────────────────────────────────────────────────────
+  # One job, one dependency install, one pytest invocation over the whole
+  # suite. This previously ran as two jobs — `tests/` minus `test_api.py`,
+  # then `test_api.py` alone — which installed identical dependencies twice
+  # and split a suite that has no reason to be split. A third job existed
+  # solely to echo a paragraph of text, consuming a runner to print a message.
+  #
+  # There is no Ollama or ChromaDB in CI; `tests/` is self-contained and mocks
+  # both.
+  test:
+    name: Tests
     runs-on: ubuntu-latest
     needs: lint
 
@@ -48,20 +54,18 @@ jobs:
       ADMIN_PASSWORD: ci-test-password
       CORS_ORIGINS: "*"
       PYTHONPATH: backend
+      # Keep CI off any model download path. The suite never constructs the
+      # reranker; if that changes, this makes the network call fail loudly
+      # instead of hanging until the job times out.
+      HF_HUB_OFFLINE: "1"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('requirements.txt') }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -69,17 +73,14 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-cov
 
-      - name: Run unit tests
+      - name: Run test suite
         working-directory: backend
         run: |
           pytest tests/ \
-            --ignore=tests/test_api.py \
-            -v \
-            --tb=short \
+            -v --tb=short \
             --cov=. \
             --cov-report=term-missing \
-            --cov-report=xml \
-            -x
+            --cov-report=xml
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -88,58 +89,24 @@ jobs:
           files: backend/coverage.xml
           fail_ci_if_error: false
 
-  # ── API Tests (mocked) ──────────────────────────────────────────────────────
-  api-tests:
-    name: API Tests (mocked)
-    runs-on: ubuntu-latest
-    needs: unit-tests
-
-    env:
-      ADMIN_PASSWORD: ci-test-password
-      CORS_ORIGINS: "*"
-      PYTHONPATH: backend
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('requirements.txt') }}
-
-      - name: Install dependencies
+      # Retrieval quality is not a unit test: it needs a running Ollama
+      # instance and a populated index. Recorded in the run summary so the
+      # omission is deliberate and visible rather than a gap to rediscover.
+      - name: Note evaluation coverage
+        if: always()
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest httpx
-
-      - name: Run API tests
-        working-directory: backend
-        run: |
-          pytest tests/test_api.py \
-            -v \
-            --tb=short \
-            -x
-
-  # ── Integration Tests (informational — Ollama required) ─────────────────────
-  integration-hint:
-    name: Integration Tests (skipped — Ollama not available in CI)
-    runs-on: ubuntu-latest
-    needs: api-tests
-    steps:
-      - name: Note about integration tests
-        run: |
-          echo "DeepEval regression tests and full end-to-end pipeline tests"
-          echo "require a running Ollama instance and ChromaDB data."
-          echo ""
-          echo "To run locally:"
-          echo "  make eval            # DeepEval regression suite"
-          echo "  make eval-ragas      # RAGAS per-query scoring"
-          echo ""
-          echo "See docs/llmops-evaluation.md for full instructions."
+          {
+            echo "### Not covered by CI"
+            echo ""
+            echo "Retrieval quality requires Ollama and a populated ChromaDB index."
+            echo "Run locally against a real corpus:"
+            echo ""
+            echo '```bash'
+            echo "make seed        # build the corpus"
+            echo "make eval-set    # build the labelled query set"
+            echo "make eval-fast   # retrieval metrics -> MLflow"
+            echo "make ablate      # stage-wise ablation"
+            echo '```'
+            echo ""
+            echo "Method and results: docs/retrieval-experiments.md"
+          } >> "$GITHUB_STEP_SUMMARY"

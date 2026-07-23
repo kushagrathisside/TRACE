@@ -21,12 +21,25 @@ backend/data/feedback.jsonl
 backend/data/trulens.db
 backend/data/mlruns/
 backend/data/*.lock
+# Per-query traces: contain real student queries, and grow ~2-4 KB per query
+backend/data/retrieval_traces.jsonl
+# Eval and ablation outputs — regenerate with `make eval-fast` / `make ablate`
+backend/data/eval_last_run.json
+backend/data/ablation_results.json
 
 # Personal data — may contain real names/emails
 backend/data/people.json
 
-# Institute-specific eval set — may contain annotated queries
+# Institute-specific eval set — regenerate with `make eval-set`
 backend/data/eval_set.json
+
+# Labelling worksheet — contains third-party abstract excerpts pulled from the
+# Semantic Scholar API. Querying the API is fine; redistributing a bulk corpus
+# of publisher abstracts is a different act. Regenerate with `make label-pool`.
+# The judgements themselves live in backend/data/eval_labels.json, which IS
+# committed: it is hand-produced work no script can reconstruct, and it holds no
+# third-party text.
+backend/data/manual_labels.md
 
 # Secrets
 .env
@@ -45,4 +58,3 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
-start.bat

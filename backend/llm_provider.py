@@ -1,10 +1,28 @@
 import os
 
-# The system socks proxy causes httpx (used by langchain_ollama) to crash at
-# import time.  Clear any proxy env vars before the import so the Ollama client
-# can initialise cleanly.  This is a one-time side-effect at module load.
-for _k in [k for k in os.environ if "proxy" in k.lower()]:
-    del os.environ[_k]
+# Ollama runs on localhost, so requests to it must not go through a corporate
+# HTTP/SOCKS proxy.  This used to be handled by deleting every proxy variable
+# from os.environ at import time — which fixed Ollama and broke everything else:
+# importing this module stripped the proxy config that Semantic Scholar
+# ingestion and HuggingFace model downloads depend on, and outbound HTTPS then
+# failed with SSL handshake timeouts that pointed nowhere near the cause.
+#
+# Exempt localhost instead, which is exactly what no_proxy is for.  Windows-style
+# values such as "<local>" are not understood by httpx/urllib, so explicit hosts
+# are appended rather than assumed.
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _exempt_localhost_from_proxy() -> None:
+    for var in ("no_proxy", "NO_PROXY"):
+        current = [h.strip() for h in os.environ.get(var, "").split(",") if h.strip()]
+        for host in _LOCAL_HOSTS:
+            if host not in current:
+                current.append(host)
+        os.environ[var] = ",".join(current)
+
+
+_exempt_localhost_from_proxy()
 
 import config  # noqa: E402
 from langchain_ollama import ChatOllama, OllamaEmbeddings  # noqa: E402

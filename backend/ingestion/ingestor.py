@@ -72,6 +72,33 @@ def _save_status(status: dict) -> None:
 sync_status: dict = _load_status()
 
 
+def _existing_institute_authors(vs, paper_ids: list[str]) -> dict[str, list[str]]:
+    """
+    institute_authors already stored for these papers, keyed by paper_id.
+
+    Used to merge rather than overwrite on incremental syncs — see the call
+    site.  Failure is non-fatal: a lookup error means we fall back to the
+    previous overwrite behaviour rather than aborting the sync.
+    """
+    if not paper_ids:
+        return {}
+    try:
+        result = vs._collection.get(ids=paper_ids, include=["metadatas"])
+    except Exception as exc:
+        logger.warning(f"Could not read existing metadata (non-fatal): {exc}")
+        return {}
+
+    out: dict[str, list[str]] = {}
+    for meta in result.get("metadatas") or []:
+        pid = (meta or {}).get("paper_id", "")
+        names = [
+            n.strip() for n in (meta or {}).get("institute_authors", "").split(",")
+        ]
+        if pid:
+            out[pid] = [n for n in names if n]
+    return out
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 
@@ -135,13 +162,30 @@ def _run_ingestion_internal() -> None:
         except Exception as exc:
             sync_status["errors"].append(f"{person['name']}: {exc}")
 
+    # ── Merge with already-indexed institute authors ──────────────────────────
+    # An incremental sync only refetches papers newer than each person's
+    # last_year, so a paper co-authored by A and B may come back under A alone.
+    # Upserting that would overwrite institute_authors with just "A" and drop B
+    # from the paper permanently — degrading people_to_consult a little more on
+    # every sync.  Existing names are merged back in before the upsert.
+    existing_meta = _existing_institute_authors(vs, list(paper_map))
+    name_to_person = {p["name"]: p for p in people}
+
     # ── Build and upsert Documents ────────────────────────────────────────────
     docs: list[Document] = []
     doc_ids: list[str] = []
 
     for pid, entry in paper_map.items():
         paper = entry["paper"]
-        inst_authors = entry["institute_authors"]
+        inst_authors = list(entry["institute_authors"])
+
+        known = {p["name"] for p in inst_authors}
+        for name in existing_meta.get(pid, []):
+            # Only re-add people still in the registry: someone removed via
+            # DELETE /api/people must not be resurrected by the next sync.
+            if name not in known and name in name_to_person:
+                inst_authors.append(name_to_person[name])
+                known.add(name)
 
         title = (paper.get("title") or "").strip()
         abstract = (paper.get("abstract") or "").strip()

@@ -1,0 +1,63 @@
+{
+  "label_source": "human",
+  "labels": {
+    "curriculum learning for sample-efficient reinforcement learning": [
+      "d44b88ac4acf6964c3a1506ab3df38721125fb7c",
+      "636178ab6fb78c843f0be93b1db380a163cdfb26",
+      "9fc6b6d3fead719cdc95263e62209548223576d1",
+      "f3a63a840185fa8c5e0db4bbe12afa7d3de7d029",
+      "621cb2bca92c12ba8381ca8512c432f5ba7dd815"
+    ],
+    "detecting and mitigating social bias in language models": [
+      "533c5cd35addd6f61f930536a86ddaca7c7fe682",
+      "87eb23f934a0e6293ee8ee9b147fe0d456e65c96"
+    ],
+    "efficient fine-tuning of large models on a single GPU": [
+      "654704066c086e1185796d61a536c36016e85f87",
+      "2fe24fa62c5d57c5bd4c93b25740d0779530987f"
+    ],
+    "evaluating factual grounding in retrieval-augmented generation": [
+      "03532123ccffae8d411264320e8a5ae2b6eddea0"
+    ],
+    "graph neural networks for molecular property prediction": [
+      "454304628bf10f02aba1c2cfc95891e94d09208e",
+      "d08a0eb7024dff5c4fabd58144a38031633d4e1a",
+      "fcce490f3daf9cbacc000d1dbfbec7ef470ca0fc",
+      "2f2fb61d2a47b3cbbec6ba01c3a78851a1cc88c8",
+      "8d170da6cf2aa174c3f8897bf8552f8b2046356c"
+    ],
+    "multimodal models that combine vision and language for robotics": [
+      "38fe8f324d2162e63a967a9ac6648974fc4c66f3",
+      "172cb3ca0b283eb1381fa840d51003d3ec0465d1",
+      "38939304bb760473141c2aca0305e44fbe04e6e8",
+      "3396609b96dd24cac3b1542aec686ce362f32fe2",
+      "0aabe33217cfee4f25b8bb16fa44f843ca181934",
+      "cb5e3f085caefd1f3d5e08637ab55d39e61234fc",
+      "1fa589c76e14492dca7a544d58628c2a4dc55264",
+      "55dff8d4cdeab9c86dccb1c8b739ac0518cdbed0",
+      "cdf54c147434c83a4a380916b6c1279b0ca19fc2"
+    ],
+    "reinforcement learning for robotic manipulation from demonstrations": [
+      "05a855c8c86d30c5ac76b9d2a6350ff21f8d451b",
+      "f33b10bf19db13bca22b4bd13963ecbcedc739f3",
+      "f3a63a840185fa8c5e0db4bbe12afa7d3de7d029",
+      "f1a36b4283e45082183c36ae8f29a77a07f91abd",
+      "b54798dd87b442aaa6888a1502200e9fe7a190ab",
+      "4b516216d7d150a081fd74993bddf36b6b22c118",
+      "91eb20f923ea3b0246868902aef4e9bea572b800",
+      "75037fac7c504d4dd995cdb3915a59b8ab5c8209",
+      "1fcfdfe06b13b36eff963d9f86f377cfcfec938a",
+      "bf89341e16fc0a379ab5e4c6370cf7ea4e9afd03",
+      "0ac948bc087603176b47c4af29ef7f240d27b541",
+      "1d803f07e4591bd67c358eef715bcd443e821894"
+    ],
+    "self-supervised pretraining for video understanding": [
+      "1c35807e1a4c24e2013fa0a090cee9cc4716a5f5",
+      "3c1e43b7d3f5fd42a06c65e3aafe6d8f4a606d5c"
+    ],
+    "using diffusion models for scientific data generation": [
+      "584915a73b8ff2ce29cf644e388279baa14be550"
+    ]
+  },
+  "note": "Hand-judged relevance for the manual slice, keyed by query text. Applied by build_eval_set.py when the eval set is regenerated."
+}

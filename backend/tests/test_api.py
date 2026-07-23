@@ -32,22 +32,27 @@ def client():
         "cached": False,
     }
 
-    # Mock Ollama health check so /api/query doesn't need Ollama running
-
-    def mock_get(url, **kwargs):
+    # Mock the Ollama reachability probe so /api/query doesn't need Ollama.
+    # The probe is async (a sync httpx.get inside an async handler blocks the
+    # event loop for the whole timeout), so the mock must be awaitable too.
+    async def mock_get(url, **kwargs):
         r = MagicMock()
         r.status_code = 200
         r.json.return_value = {"models": [{"name": "llama3.2"}]}
         r.raise_for_status = lambda: None
         return r
 
+    import main
+    from fastapi.testclient import TestClient
+
     with (
         patch("rag.pipeline.run", return_value=mock_result),
-        patch("httpx.get", side_effect=mock_get),
+        patch.object(main, "httpx_get_async", side_effect=mock_get),
+        # Never load real model weights in a test: the cross-encoder would be
+        # downloaded on first use and the suite would hang on the network.
+        patch("main._warmup"),
+        patch("rag.pipeline.build_bm25_on_startup"),
     ):
-        import main
-        from fastapi.testclient import TestClient
-
         yield TestClient(main.app, raise_server_exceptions=False)
 
 

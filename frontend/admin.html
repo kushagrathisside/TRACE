@@ -3,27 +3,30 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TRACE — Admin</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <title>TRACE — Administration</title>
+  <link rel="stylesheet" href="/static/style.css?v=3" />
 </head>
 <body>
 
 <header class="page-header">
-  <h1>⚙️ TRACE — Admin</h1>
-  <nav>
-    <a href="/">Student</a>
-    <a href="/admin">Admin</a>
+  <h1>
+    TRACE
+    <span class="subtitle">Administration</span>
+  </h1>
+  <nav aria-label="Primary">
+    <a href="/">Search</a>
+    <a href="/admin" aria-current="page">Administration</a>
   </nav>
 </header>
 
-<div class="container">
+<main class="container container--wide">
 
   <!-- Auth -->
   <div id="auth-section" class="card">
-    <h2>Admin Login</h2>
+    <h2>Sign in</h2>
     <div class="field">
       <label for="pw">Password</label>
-      <input type="password" id="pw" placeholder="Enter admin password" />
+      <input type="password" id="pw" placeholder="Administrator password" autocomplete="current-password" />
     </div>
     <button class="btn btn-primary" onclick="login()">Login</button>
     <div id="auth-error" style="margin-top:0.75rem"></div>
@@ -37,10 +40,10 @@
 
     <!-- Stats -->
     <div class="stats-row">
-      <div class="stat-card"><div class="num" id="stat-papers">—</div><div class="lbl">Papers Indexed</div></div>
-      <div class="stat-card"><div class="num" id="stat-people">—</div><div class="lbl">People Registered</div></div>
+      <div class="stat-card"><div class="num" id="stat-papers">—</div><div class="lbl">Papers indexed</div></div>
+      <div class="stat-card"><div class="num" id="stat-people">—</div><div class="lbl">People registered</div></div>
       <div class="stat-card" style="flex:2;text-align:left;padding:1rem 1.25rem">
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.25rem">Last Sync</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.25rem">Last sync</div>
         <div id="stat-sync" style="font-size:0.95rem;font-weight:600">Never</div>
         <div id="sync-progress" style="margin-top:0.3rem;font-size:0.8rem;color:var(--muted)"></div>
       </div>
@@ -81,7 +84,7 @@
     </div>
 
   </div>
-</div>
+</main>
 
 <!-- Add Person Modal -->
 <div class="modal-overlay" id="add-modal">
